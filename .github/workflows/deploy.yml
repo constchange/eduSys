@@ -9,10 +9,6 @@
   env:
     VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
 
-
-
-
-
 name: Deploy to GitHub Pages
 
 on:
