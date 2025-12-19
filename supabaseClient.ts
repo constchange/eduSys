@@ -1,19 +1,27 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Access import.meta as any to avoid "Property 'env' does not exist on type 'ImportMeta'" errors
-// when vite/client types are not found.
-const meta = import.meta as any;
-const supabaseUrl = meta.env?.VITE_SUPABASE_URL;
-const supabaseKey = meta.env?.VITE_SUPABASE_KEY;
+// CRITICAL FIX: Access environment variables DIRECTLY.
+// Vite uses static analysis to replace 'import.meta.env.VITE_xxx' with the actual string value during build.
+// Using intermediate variables (like const env = import.meta.env) breaks this replacement mechanism in production.
+
+// @ts-ignore
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+// @ts-ignore
+const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
+
+// Debugging: Log status to verify injection (showing partial key for safety)
+console.log('Supabase Config Status:', { 
+  hasUrl: !!supabaseUrl, 
+  hasKey: !!supabaseKey,
+  urlSnippet: supabaseUrl ? supabaseUrl.substring(0, 10) + '...' : 'undefined'
+});
 
 export const isSupabaseConfigured = !!supabaseUrl && !!supabaseKey;
 
-// Warn only, do not error, so execution continues
 if (!isSupabaseConfigured) {
-  console.warn("Supabase Warning: Missing Environment Variables. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_KEY.");
+  console.warn("Supabase Warning: Missing Environment Variables. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_KEY are set in GitHub Secrets and injected via the workflow.");
 }
 
-// 使用空字符串作为回退防止应用直接崩溃，但在未配置Key的情况下网络请求会失败（符合预期）
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co', 
   supabaseKey || 'placeholder'
