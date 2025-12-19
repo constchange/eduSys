@@ -1,23 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Access environment variables securely
-// Vite will replace import.meta.env.VITE_SUPABASE_URL with the actual string during build
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
-
-// Debugging: Log status (Not the actual key) to console
-console.log('Supabase Config Status:', { 
-  hasUrl: !!supabaseUrl, 
-  hasKey: !!supabaseKey,
-  urlLength: supabaseUrl ? supabaseUrl.length : 0 
-});
+// Access import.meta as any to avoid "Property 'env' does not exist on type 'ImportMeta'" errors
+// when vite/client types are not found.
+const meta = import.meta as any;
+const supabaseUrl = meta.env?.VITE_SUPABASE_URL;
+const supabaseKey = meta.env?.VITE_SUPABASE_KEY;
 
 export const isSupabaseConfigured = !!supabaseUrl && !!supabaseKey;
 
+// Warn only, do not error, so execution continues
 if (!isSupabaseConfigured) {
   console.warn("Supabase Warning: Missing Environment Variables. Please configure VITE_SUPABASE_URL and VITE_SUPABASE_KEY.");
 }
 
+// 使用空字符串作为回退防止应用直接崩溃，但在未配置Key的情况下网络请求会失败（符合预期）
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co', 
   supabaseKey || 'placeholder'

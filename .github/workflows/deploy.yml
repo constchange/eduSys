@@ -24,22 +24,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          # cache: 'npm' removed to fix build error when package-lock.json is missing
       - name: Install dependencies
         run: npm install
-      
-      # 安全修复：通过 env 上下文传递 Secret，防止特殊字符导致写入失败
-      - name: Create .env file
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
-        run: |
-          touch .env
-          echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" >> .env
-          echo "VITE_SUPABASE_KEY=$VITE_SUPABASE_KEY" >> .env
-          
       - name: Build
         run: npm run build
-      
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
