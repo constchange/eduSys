@@ -24,11 +24,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # cache: 'npm' removed to fix build error when package-lock.json is missing
       - name: Install dependencies
         run: npm install
       - name: Build
         run: npm run build
+        env:
+          # explicit injection of secrets is required for Vite to see them
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
