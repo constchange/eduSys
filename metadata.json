@@ -1,0 +1,5 @@
+{
+  "name": "EduTrack Pro",
+  "description": "A comprehensive educational management system for managing teachers, TAs, courses, and schedules with conflict detection and automated reporting.",
+  "requestFramePermissions": []
+}
