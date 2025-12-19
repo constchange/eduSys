@@ -24,17 +24,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-# ↓↓↓↓ 把上面的代码粘贴在这里，注意短横线 - 要对齐 ↓↓↓↓
-      - name: Debug Secrets Check
-        env:
-          THE_SECRET: ${{ secrets.VITE_SUPABASE_URL }}
-        run: |
-          if [ -z "$THE_SECRET" ]; then
-            echo "❌ 失败: Secret 是空的 (未读取到)"
-          else
-            echo "✅ 成功: Secret 已读取 (由于安全机制显示为 ***)"
-          fi
-      # ↑↑↑↑ 粘贴结束 ↑↑↑↑
       - name: Install dependencies
         run: npm install
       - name: Build
