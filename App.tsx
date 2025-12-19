@@ -89,6 +89,10 @@ const App: React.FC = () => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setCheckingAuth(false);
+    }).catch((err) => {
+        // Handle initialization error (e.g. network error if config is missing)
+        console.warn("Auth initialization failed:", err);
+        setCheckingAuth(false);
     });
 
     // 2. 监听登录/登出变化

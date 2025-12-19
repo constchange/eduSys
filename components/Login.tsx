@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { supabase } from '../supabaseClient';
-import { LogIn, Loader2 } from 'lucide-react';
+import { supabase, isSupabaseConfigured } from '../supabaseClient';
+import { LogIn, Loader2, AlertTriangle } from 'lucide-react';
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -13,6 +13,12 @@ const Login: React.FC = () => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
+
+    if (!isSupabaseConfigured) {
+        setMessage({ text: 'Configuration Missing: Cannot connect to Supabase.', type: 'error' });
+        setLoading(false);
+        return;
+    }
 
     try {
       if (mode === 'signup') {
@@ -63,6 +69,16 @@ const Login: React.FC = () => {
             </div>
           )}
 
+          {!isSupabaseConfigured && (
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-3 text-sm text-amber-800">
+                <AlertTriangle className="shrink-0 mt-0.5" size={16} />
+                <div>
+                    <strong>Supabase 未配置</strong>
+                    <p className="mt-1 opacity-90">请在环境变量中配置 <code>VITE_SUPABASE_URL</code> 和 <code>VITE_SUPABASE_KEY</code> 以使用系统。</p>
+                </div>
+            </div>
+          )}
+
           <form onSubmit={handleAuth} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-1">邮箱地址</label>
@@ -88,8 +104,10 @@ const Login: React.FC = () => {
             
             <button 
               type="submit" 
-              disabled={loading}
-              className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
+              disabled={loading || !isSupabaseConfigured}
+              className={`w-full text-white py-2 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 ${
+                  !isSupabaseConfigured ? 'bg-slate-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
+              }`}
             >
               {loading ? <Loader2 className="animate-spin" size={20} /> : <LogIn size={20} />}
               {mode === 'signin' ? '登录' : '注册'}
