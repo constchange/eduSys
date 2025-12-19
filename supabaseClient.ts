@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Access import.meta as any to avoid "Property 'env' does not exist on type 'ImportMeta'" errors
-const meta = import.meta as any;
-const supabaseUrl = meta.env?.VITE_SUPABASE_URL;
-const supabaseKey = meta.env?.VITE_SUPABASE_KEY;
+// Access environment variables securely
+// Vite will replace import.meta.env.VITE_SUPABASE_URL with the actual string during build
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
 
 // Debugging: Log status (Not the actual key) to console
 console.log('Supabase Config Status:', { 
