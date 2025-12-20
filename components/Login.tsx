@@ -22,12 +22,17 @@ const Login: React.FC = () => {
 
     try {
       if (mode === 'signup') {
+        // 获取当前页面的完整基础路径（去除 search 和 hash）
+        // 例如：https://user.github.io/repo-name/
+        // 修复：之前只用 origin 会导致跳回 https://user.github.io 根目录从而 404
+        const redirectTo = window.location.origin + window.location.pathname;
+
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            // 关键：告诉 Supabase 验证邮件后跳回当前网页（例如你的 GitHub Pages 地址）
-            emailRedirectTo: window.location.origin 
+            // 关键：告诉 Supabase 验证邮件后跳回当前网页。
+            emailRedirectTo: redirectTo
           }
         });
         if (error) throw error;
