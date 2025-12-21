@@ -7,7 +7,21 @@ import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const CourseManager: React.FC = () => {
-  const { courses, teachers, assistants, addCourse, updateCourse, deleteCourse, importData } = useAppStore();
+  const { courses, teachers, assistants, addCourse, updateCourse, deleteCourse, importData, currentUser } = useAppStore();
+  const isViewer = !!(currentUser && currentUser.role === 'viewer');
+
+  // If viewer, they are not allowed to access the course management page
+  if (isViewer) {
+    return (
+      <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-200 h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-xl font-bold mb-2">No Permission</div>
+          <div className="text-sm text-slate-600 mb-4">You are currently a viewer and cannot access or edit the "Courses" page. Please go to the "Schedule & Stats" calendar view to see your related schedule.</div>
+        </div>
+      </div>
+    );
+  }
+
   const [viewMode, setViewMode] = useState<'card' | 'grid'>('card'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);

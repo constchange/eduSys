@@ -22,7 +22,8 @@ interface MonthlyStats {
 }
 
 const ScheduleStats: React.FC = () => {
-  const { teachers, assistants, sessions, courses, scheduleParams, updateScheduleParams } = useAppStore();
+  const { teachers, assistants, sessions, courses, scheduleParams, updateScheduleParams, currentUser } = useAppStore();
+  const isViewer = !!(currentUser && currentUser.role === 'viewer');
   const [viewMode, setViewMode] = React.useState<'calendar' | 'stats'>('calendar');
 
   // Load state from store
@@ -54,10 +55,21 @@ const ScheduleStats: React.FC = () => {
       }
   }, [sessions, startMonth, endMonth, updateScheduleParams]);
 
-  const people = [...teachers, ...assistants];
-  const selectedPerson = selectedPersonId === 'ALL' 
-    ? { id: 'ALL', name: 'ALL STAFF (Overview)', type: 'Overview' } as any 
-    : people.find(p => p.id === selectedPersonId);
+  // For viewers, compute separate lists for teachers and assistants to avoid duplicates
+  const viewerTeachers = isViewer ? teachers.filter(t => t.name === currentUser?.name) : [];
+  const viewerAssistants = isViewer ? assistants.filter(a => a.name === currentUser?.name) : [];
+  const people = isViewer ? [...viewerTeachers, ...viewerAssistants] : [...teachers, ...assistants];
+
+  const selectedPerson = selectedPersonId === 'ALL'
+    ? { id: 'ALL', name: 'ALL STAFF (Overview)', type: 'Overview' } as any
+    : (teachers.find(p => p.id === selectedPersonId) || assistants.find(p => p.id === selectedPersonId));
+
+  // If viewer, ensure selectedPersonId is set to their own person id (prefer teacher, else assistant)
+  React.useEffect(() => {
+    if (!isViewer) return;
+    const mine = viewerTeachers[0] ?? viewerAssistants[0];
+    if (mine && selectedPersonId !== mine.id) updateScheduleParams({ selectedPersonId: mine.id });
+  }, [isViewer, viewerTeachers, viewerAssistants, selectedPersonId, updateScheduleParams]);
 
   const courseColorMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -67,9 +79,14 @@ const ScheduleStats: React.FC = () => {
 
   const personSessions = useMemo(() => {
     if (!selectedPersonId) return [];
-    if (selectedPersonId === 'ALL') return sessions;
+    if (selectedPersonId === 'ALL') return isViewer ? sessions.filter(s => {
+      // Viewer shouldn't see ALL; but if somehow selected, restrict to matching name
+      const teacherNames = teachers.filter(t => s.teacherIds.includes(t.id)).map(t => t.name);
+      const assistantNames = assistants.filter(a => s.assistantIds.includes(a.id)).map(a => a.name);
+      return teacherNames.includes(currentUser?.name || '') || assistantNames.includes(currentUser?.name || '');
+    }) : sessions;
     return sessions.filter(s => s.teacherIds.includes(selectedPersonId) || s.assistantIds.includes(selectedPersonId));
-  }, [selectedPersonId, sessions]);
+  }, [selectedPersonId, sessions, isViewer, teachers, assistants, currentUser]);
 
   const monthsToDisplay = useMemo(() => {
       if (!startMonth || !endMonth || startMonth > endMonth) return [];
@@ -151,9 +168,9 @@ const ScheduleStats: React.FC = () => {
               <label className="block text-sm font-semibold text-slate-600 mb-1">Select Staff</label>
               <select className="w-full border p-2 rounded-lg" value={selectedPersonId} onChange={e => updateScheduleParams({ selectedPersonId: e.target.value })}>
                 <option value="">-- Select --</option>
-                <option value="ALL" className="font-bold">ALL STAFF (Overview)</option>
-                <optgroup label="Teachers">{teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>
-                <optgroup label="Assistants">{assistants.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
+                {!isViewer && <option value="ALL" className="font-bold">ALL STAFF (Overview)</option>}
+                <optgroup label="Teachers">{(isViewer ? viewerTeachers : teachers).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>
+                <optgroup label="Assistants">{(isViewer ? viewerAssistants : assistants).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup>
               </select>
             </div>
             <div>
@@ -242,7 +259,7 @@ const ScheduleStats: React.FC = () => {
                     </tr>
                     </thead>
                     <tbody>
-                    {teachers.map(t => (
+                    {(isViewer ? teachers.filter(t => t.name === currentUser?.name) : teachers).map(t => (
                         <tr key={t.id} className="hover:bg-slate-50">
                         <td className="p-3 border-b font-medium bg-slate-50/30">{t.name}</td>
                         {statMonths.map(m => {

@@ -7,8 +7,25 @@ import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const SessionManager: React.FC = () => {
-  const { sessions, courses, teachers, assistants, addSession, updateSession, deleteSession, importData } = useAppStore();
+  const { sessions, courses, teachers, assistants, addSession, updateSession, deleteSession, importData, currentUser } = useAppStore();
+  const isViewer = !!(currentUser && currentUser.role === 'viewer');
+
+  // Viewers should not access the sessions management page directly
+  if (isViewer) {
+    return (
+      <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-200 h-full flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-xl font-bold mb-2">No Permission</div>
+          <div className="text-sm text-slate-600 mb-4">You are currently a viewer and cannot access or edit the "Sessions" page. Please go to the "Schedule & Stats" calendar view to see your related schedule.</div>
+        </div>
+      </div>
+    );
+  }
+
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list'); 
+
+  // Force list view for viewer (readonly)
+  React.useEffect(() => { if (isViewer && viewMode === 'grid') setViewMode('list'); }, [isViewer, viewMode]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -42,6 +59,15 @@ const SessionManager: React.FC = () => {
   const activeCourse = courses.find(c => c.id === formData.courseId);
   const availableTeachers = teachers.filter(t => activeCourse?.teacherIds.includes(t.id));
   const availableAssistants = assistants.filter(a => activeCourse?.assistantIds.includes(a.id));
+
+  // Helper to check if session involves current viewer by name
+  const sessionMatchesViewer = (s: Session) => {
+    if (!isViewer || !currentUser) return true;
+    const tNames = teachers.filter(t => s.teacherIds.includes(t.id)).map(t => t.name);
+    const aNames = assistants.filter(a => s.assistantIds.includes(a.id)).map(a => a.name);
+    return tNames.includes(currentUser.name) || aNames.includes(currentUser.name);
+  };
+
 
   useEffect(() => {
     const dur = calculateDuration(formData.startTime, formData.endTime);
@@ -232,7 +258,7 @@ const SessionManager: React.FC = () => {
     return ids.map(id => list.find(p => p.id === id)?.name).filter((n): n is string => !!n);
   };
 
-  const filteredSessions = selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions;
+  const filteredSessions = (selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions).filter(s => sessionMatchesViewer(s));
 
   const gridColumns: GridColumn[] = [
     { field: 'sequence', header: 'Seq', type: 'number', width: '50px' },
@@ -276,19 +302,22 @@ const SessionManager: React.FC = () => {
           </select>
           <div className="flex bg-slate-100 p-1 rounded-lg mr-2">
              <button onClick={() => setViewMode('list')} className={`p-2 rounded ${viewMode === 'list' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><List size={18}/></button>
-             <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button>
+             { !isViewer && <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button> }
           </div>
           
-          <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
-          <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
-          <button onClick={() => exportToCSV(filteredSessions, 'Sessions_Export')} className="btn-secondary border px-4 rounded hover:bg-slate-50"><Download size={18}/></button>
-          
-          <button onClick={() => setIsBatchModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-            <CalendarRange size={18} /> Batch
-          </button>
-          <button onClick={() => handleOpenModal()} className="bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-orange-700">
-            <Plus size={18} /> Add
-          </button>
+          { !isViewer && (
+            <>
+              <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
+              <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
+              <button onClick={() => exportToCSV(filteredSessions, 'Sessions_Export')} className="btn-secondary border px-4 rounded hover:bg-slate-50"><Download size={18}/></button>
+              <button onClick={() => setIsBatchModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                <CalendarRange size={18} /> Batch
+              </button>
+              <button onClick={() => handleOpenModal()} className="bg-orange-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-orange-700">
+                <Plus size={18} /> Add
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -337,8 +366,8 @@ const SessionManager: React.FC = () => {
                           )}
                       </div>
                       <div className="w-20 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => handleOpenModal(s)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>
-                        <button onClick={() => handleDelete(s.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>
+                        {!isViewer && <button onClick={() => handleOpenModal(s)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>}
+                        {!isViewer && <button onClick={() => handleDelete(s.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>}
                       </div>
                   </div>
                 );

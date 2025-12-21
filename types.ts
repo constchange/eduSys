@@ -79,3 +79,12 @@ export interface AppState {
   sessions: Session[];
   scheduleParams: ScheduleParams;
 }
+
+export type Role = 'owner' | 'editor' | 'viewer' | 'visitor';
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+}

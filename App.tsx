@@ -6,14 +6,24 @@ import PersonManager from './components/PersonManager';
 import CourseManager from './components/CourseManager';
 import SessionManager from './components/SessionManager';
 import ScheduleStats from './components/ScheduleStats';
+import AdminPanel from './components/AdminPanel';
 import { Users, GraduationCap, BookOpen, Clock, Calendar, LogOut, Loader2 } from 'lucide-react';
 
-type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule';
+type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule' | 'admin';
 
 // 内部组件：主界面
 const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, onLogout }) => {
   const [activeTab, setActiveTab] = useState<Tab>('teachers');
-  const { isLoading } = useAppStore();
+  const { isLoading, profileLoading, currentUser } = useAppStore();
+
+  if (profileLoading) {
+    return (
+      <div className="h-screen w-screen bg-slate-900 flex flex-col gap-4 items-center justify-center text-white">
+        <Loader2 className="animate-spin text-indigo-500" size={48} />
+        <div className="text-slate-400 text-sm font-medium">加载权限信息…</div>
+      </div>
+    );
+  }
 
   const navItems = [
     { id: 'teachers', label: 'Teachers', icon: Users },
@@ -23,12 +33,27 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
     { id: 'schedule', label: 'Schedule & Stats', icon: Calendar },
   ];
 
+  // 如果是负责人，允许访问用户管理
+  const showAdmin = currentUser && currentUser.role === 'owner';
+  const isEditor = currentUser && currentUser.role === 'editor';
+
   return (
+      // 如果当前用户未设置 profile 或为游客，显示无权限提示
       <div className="flex h-screen bg-slate-100 text-slate-800 font-sans">
+        {(!currentUser || currentUser.role === 'visitor') ? (
+          <div className="m-auto text-center">
+            <div className="text-2xl font-bold mb-2">无访问权限</div>
+            <div className="text-sm text-slate-600 mb-6">您的账号当前是游客或尚未完成资料，无法查看应用内容。</div>
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={onLogout} className="px-4 py-2 bg-indigo-600 text-white rounded">登出</button>
+            </div>
+          </div>
+        ) : (
+        <div className="flex h-screen bg-slate-100 text-slate-800 font-sans">
         {/* Sidebar */}
         <aside className="w-64 bg-slate-900 text-white flex flex-col flex-shrink-0 transition-all">
           <div className="p-6 border-b border-slate-800">
-            <h1 className="text-xl font-bold tracking-tight">EduTrack Pro</h1>
+            <h1 className="text-xl font-bold tracking-tight">EduSys Lite</h1>
             <p className="text-xs text-slate-400 mt-1">Cloud Edition</p>
           </div>
           
@@ -50,6 +75,22 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
                 </button>
               );
             })}
+            {showAdmin && (
+              <button
+                onClick={() => setActiveTab('admin' as Tab)}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                  activeTab === 'admin' 
+                    ? 'bg-indigo-600 text-white shadow-lg' 
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <Users size={20} />
+                <span className="font-medium">User Management</span>
+              </button>
+            )}
+            {isEditor && (
+              <div className="p-3 text-xs text-slate-400">您是编辑人，除用户管理外拥有全部权限</div>
+            )}
           </nav>
           
           <div className="p-4 border-t border-slate-800">
@@ -73,8 +114,11 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
             {activeTab === 'courses' && <CourseManager />}
             {activeTab === 'sessions' && <SessionManager />}
             {activeTab === 'schedule' && <ScheduleStats />}
+            {activeTab === 'admin' && <AdminPanel />}
           </div>
         </main>
+        </div>
+        )}
       </div>
   );
 };

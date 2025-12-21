@@ -7,6 +7,7 @@ const Login: React.FC = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [name, setName] = useState('');
   const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -22,28 +23,75 @@ const Login: React.FC = () => {
 
     try {
       if (mode === 'signup') {
+        if (!name || name.trim().length === 0) {
+          setMessage({ text: '请填写姓名', type: 'error' });
+          setLoading(false);
+          return;
+        }
+
+        // 检查姓名唯一性（users 表）
+        const nameCheck = await supabase.from('users').select('id').eq('name', name).maybeSingle();
+        if (nameCheck && nameCheck.data) {
+          setMessage({ text: '该姓名已被使用，请更换姓名', type: 'error' });
+          setLoading(false);
+          return;
+        }
         // 获取当前页面的完整基础路径（去除 search 和 hash）
         // 例如：https://user.github.io/repo-name/
         // 修复：之前只用 origin 会导致跳回 https://user.github.io 根目录从而 404
         const redirectTo = window.location.origin + window.location.pathname;
 
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            // 关键：告诉 Supabase 验证邮件后跳回当前网页。
-            emailRedirectTo: redirectTo
+            // 关键：告诉 Supabase 验证邮件后跳回当前网页，并把 name 写入 auth metadata
+            emailRedirectTo: redirectTo,
+            data: { name }
           }
         });
         if (error) throw error;
-        setMessage({ text: '注册确认邮件已发送！请前往邮箱（包括垃圾箱）查收，点击链接后刷新此页面即可登录。', type: 'success' });
+
+        // 如果 signUp 同时返回 session（自动确认或即时登录），我们可以写入 users.auth_id
+        const role = name === '负责人' ? 'owner' : 'visitor';
+        try {
+          const authId = data?.user?.id ?? null;
+          // 仅在存在 session 时写入带 auth_id 的用户记录；否则在用户验证并首次登录后由 store 同步插入
+          if (authId && data?.session) {
+            await supabase.from('users').insert([{ email, name, role, auth_id: authId }]);
+          }
+        } catch (e) {
+          // 可能由于 RLS 拒绝匿名插入，这里仅记录错误，后续 auth 完成后会同步
+          console.error('Create users record failed (might be RLS):', e);
+        }
+
+        setMessage({ text: '注册确认邮件已发送！请前往邮箱（包括垃圾箱）查收，点击链接后刷新此页面或登录以完成资料同步。', type: 'success' });
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
-        // 登录成功会自动触发 App.tsx 的状态更新
+
+        // 登录成功后，确保 users 表中该邮箱的记录包含当前 auth id（用于 RLS 匹配）
+        try {
+          const authUser = data?.user ?? (await supabase.auth.getUser()).data.user;
+          const authId = authUser?.id;
+          const metaName = (authUser as any)?.user_metadata?.name || email;
+          if (authId) {
+            // Use RPC to claim or create the users row (handles historical rows without auth_id)
+            const rpc = await supabase.rpc('claim_or_create_user', { p_email: email, p_name: metaName });
+            // rpc returns an array of rows; we don't strictly need the returned value here
+            // but we attempt a final fetch to confirm
+            const { data: existing } = await supabase.from('users').select('*').eq('email', email).maybeSingle();
+            if (!existing) {
+              // unexpected, but try direct insert (may be blocked by RLS)
+              await supabase.from('users').insert([{ email, name: metaName, role: 'visitor', auth_id: authId }]);
+            }
+          }
+        } catch (e) {
+          console.error('Ensure users.auth_id failed:', e);
+        }
       }
     } catch (error: any) {
       let msg = error.message;
@@ -95,6 +143,18 @@ const Login: React.FC = () => {
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
+            {mode === 'signup' && (
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">姓名（必须唯一）</label>
+                <input
+                  type="text"
+                  required
+                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-1">密码</label>
               <input 

@@ -11,9 +11,16 @@ interface Props {
 }
 
 const PersonManager: React.FC<Props> = ({ type }) => {
-  const { teachers, assistants, addPerson, updatePerson, deletePerson, importData } = useAppStore();
-  const list = type === 'Teacher' ? teachers : assistants;
+  const { teachers, assistants, addPerson, updatePerson, deletePerson, importData, currentUser } = useAppStore();
+  const rawList = type === 'Teacher' ? teachers : assistants;
+  const isViewer = !!(currentUser && currentUser.role === 'viewer');
+  const list = isViewer ? rawList.filter(p => p.name === currentUser?.name) : rawList;
   const [viewMode, setViewMode] = useState<'card' | 'grid'>('card'); 
+
+  // If viewer, force card view (readonly)
+  React.useEffect(() => {
+    if (isViewer && viewMode === 'grid') setViewMode('card');
+  }, [isViewer, viewMode]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -153,14 +160,17 @@ const PersonManager: React.FC<Props> = ({ type }) => {
         <div className="flex gap-2">
            <div className="flex bg-slate-100 p-1 rounded-lg mr-2">
              <button onClick={() => setViewMode('card')} className={`p-2 rounded ${viewMode === 'card' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><LayoutGrid size={18}/></button>
-             <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button>
+             { !isViewer && <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button> }
            </div>
           
-          <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
-          <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
-          <button onClick={() => exportToCSV(list, `${type}_Export`)} className="btn-secondary flex items-center gap-2 px-4 py-2 border rounded hover:bg-slate-50"><Download size={18} /> Export</button>
-          
-          <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"><Plus size={18} /> Add {type}</button>
+          { !isViewer && (
+            <>
+              <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
+              <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
+              <button onClick={() => exportToCSV(filteredList, `${type}_Export`)} className="btn-secondary flex items-center gap-2 px-4 py-2 border rounded hover:bg-slate-50"><Download size={18} /> Export</button>
+              <button onClick={() => handleOpenModal()} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"><Plus size={18} /> Add {type}</button>
+            </>
+          )}
         </div>
       </div>
       <div className="mb-4 relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} /><input className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search..." /></div>
@@ -176,10 +186,12 @@ const PersonManager: React.FC<Props> = ({ type }) => {
                     <h3 className="font-bold text-lg text-slate-800">{p.name}</h3>
                     <div className="text-xs text-slate-500">{p.gender} • {p.currentUnit}</div>
                   </div>
+                  {!isViewer && (
                   <div className="flex gap-1">
                     <button onClick={() => handleOpenModal(p)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>
                     <button onClick={() => handleDelete(p.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
                   </div>
+                  )}
                 </div>
                 <div className="space-y-1 text-sm text-slate-600">
                   <div className="flex justify-between"><span>Phone:</span> <span className="font-medium">{p.phone}</span></div>

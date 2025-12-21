@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
-import { AppState, Course, Person, Session, ScheduleParams } from './types';
+import { AppState, Course, Person, Session, ScheduleParams, UserRecord, Role } from './types';
 
 // --- 1. 定义数据库白名单 (DB Schema Definition) ---
 // 只有在这里列出的字段才会被发送到 Supabase。
@@ -27,6 +27,9 @@ const DB_SCHEMA = {
     'date', 'startTime', 'endTime', 'durationHours', 
     'notes'
   ]
+  ,
+  // 用户表：用于权限管理（与 Auth 整合）
+  users: ['id', 'email', 'name', 'role']
 };
 
 // --- 2. 数据清洗函数 (Sanitizer) ---
@@ -56,6 +59,12 @@ interface AppContextType extends AppState {
   importData: (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => void;
   updateScheduleParams: (params: Partial<ScheduleParams>) => void;
   isLoading: boolean;
+  profileLoading: boolean;
+  users: UserRecord[];
+  currentUser: UserRecord | null;
+  isEditor: boolean;
+  updateUserRole: (userId: string, role: Role) => Promise<void>;
+  inviteUser: (email: string, name: string, role?: Role) => Promise<boolean>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -75,19 +84,23 @@ const initialState: AppState = {
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AppState>(initialState);
   const [isLoading, setIsLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
+  const isEditor = !!(currentUser && currentUser.role === 'editor');
 
   // --- 初始化加载数据 (READ) ---
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const [peopleRes, coursesRes, sessionsRes] = await Promise.all([
-          supabase.from('people').select('*'),
-          supabase.from('courses').select('*'),
-          supabase.from('sessions').select('*')
-        ]);
-        
+        const peopleRes = await supabase.from('people').select('*');
+        const usersRes = await supabase.from('users').select('*');
+        const coursesRes = await supabase.from('courses').select('*');
+        const sessionsRes = await supabase.from('sessions').select('*');
+
         const people = (peopleRes.data as Person[]) || [];
+        const usersList = (usersRes.data as UserRecord[]) || [];
         const coursesRaw = (coursesRes.data as Course[]) || [];
         const sessions = (sessionsRes.data as Session[]) || [];
 
@@ -110,6 +123,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sessions: sessions
         }));
 
+        setUsers(usersList);
+
         if (peopleRes.error) console.error("Fetch People Error:", peopleRes.error);
         
       } catch (error: any) {
@@ -120,6 +135,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     fetchData();
+  }, []);
+
+  // 监听 auth 状态并设置 currentUser（根据 users 表的 email 匹配）
+  useEffect(() => {
+    const setProfileFromAuth = async () => {
+      setProfileLoading(true);
+      try {
+        const { data } = await supabase.auth.getUser();
+        const authUser = data.user;
+        if (authUser && authUser.email) {
+          const { data: u } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
+          if (u) {
+            setCurrentUser(u as UserRecord);
+          } else {
+            // 如果 users 表中不存在记录，尝试通过 RPC (claim_or_create_user) 来创建或认领这条记录。
+            // 这可以处理历史遗留的无 auth_id 行或在注册时未插入带 auth_id 的情况。
+            const metaName = (authUser as any)?.user_metadata?.name || authUser.email;
+            try {
+              const rpcRes = await supabase.rpc('claim_or_create_user', { p_email: authUser.email, p_name: metaName });
+              // rpc 返回 users 行
+              if (rpcRes && rpcRes.data && rpcRes.data.length > 0) {
+                const created = rpcRes.data[0] as UserRecord;
+                setCurrentUser(created);
+                const usersFetch = await supabase.from('users').select('*');
+                setUsers((usersFetch.data as UserRecord[]) || []);
+              } else {
+                // fallback to simple fetch
+                const { data: newU } = await supabase.from('users').select('*').eq('email', authUser.email).maybeSingle();
+                if (newU) setCurrentUser(newU as UserRecord);
+                else setCurrentUser(null);
+              }
+            } catch (e) {
+              console.error('Failed to claim/create users row via RPC:', e);
+              setCurrentUser(null);
+            }
+          }
+        } else {
+          setCurrentUser(null);
+        }
+      } catch (e) {
+        console.error('Error setting current user from auth:', e);
+      } finally {
+        setProfileLoading(false);
+      }
+    };
+
+    setProfileFromAuth();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setProfileFromAuth();
+    });
+
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   // --- 辅助函数：更新本地 Course 统计 ---
@@ -371,14 +439,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // 更新用户角色（仅供前端调用，实际权限依赖 Supabase RLS/后端）
+  const updateUserRole = async (userId: string, role: Role) => {
+    // Guard: only owner can change roles; prevent accidental calls from editors
+    if (!currentUser || currentUser.role !== 'owner') {
+      console.warn('updateUserRole requires owner privileges');
+      return;
+    }
+
+    try {
+      const payload = sanitize({ role }, 'users');
+      const { error } = await supabase.from('users').update(payload).eq('id', userId);
+      if (error) throw error;
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role } : u));
+      // 如果 we changed currentUser, update it too
+      setCurrentUser(prev => prev && prev.id === userId ? { ...prev, role } : prev);
+    } catch (err) {
+      console.error('updateUserRole error:', err);
+    }
+  };
+  // Invite / create a user (owner-only)
+  const inviteUser = async (email: string, name: string, role: Role = 'visitor') => {
+    if (!currentUser || currentUser.role !== 'owner') {
+      throw new Error('Only owner can invite users');
+    }
+    try {
+      const payload = sanitize({ email, name, role }, 'users');
+      const { error } = await supabase.from('users').insert([payload]);
+      if (error) throw error;
+      const usersFetch = await supabase.from('users').select('*');
+      setUsers((usersFetch.data as UserRecord[]) || []);
+      return true;
+    } catch (err: any) {
+      console.error('inviteUser error:', err);
+      throw err;
+    }
+  };
   return (
     <AppContext.Provider value={{
       ...state,
+      users,
+      currentUser,
+      isEditor,
+      updateUserRole,
       addPerson, updatePerson, deletePerson,
       addCourse, updateCourse, deleteCourse,
       addSession, updateSession, deleteSession,
       importData, updateScheduleParams,
-      isLoading
+      isLoading,
+      profileLoading,
+      inviteUser
     }}>
       {children}
     </AppContext.Provider>
