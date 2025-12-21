@@ -48,7 +48,6 @@ const AdminPanel: React.FC = () => {
   }
 
   const handleChange = async (id: string, role: Role) => {
-    // Prevent downgrading the active owner accidentally
     if (id === currentUser.id && role !== 'owner') {
       alert('不能更改自己的负责人角色。如需降级，请先委任其他负责人。');
       return;
@@ -59,7 +58,6 @@ const AdminPanel: React.FC = () => {
   const handleInvite = async () => {
     try {
       if (!inviteName.trim() || !inviteEmail.trim()) return alert('Please input name and email');
-      // Basic uniqueness check
       if (users.some(u => u.name === inviteName)) return alert('Name already exists！');
       if (users.some(u => u.email === inviteEmail)) return alert('Email already exists!');
       if (invitePhone.trim() && users.some(u => u.phone === invitePhone.trim())) return alert('Phone already exists!');
@@ -192,7 +190,8 @@ const AdminPanel: React.FC = () => {
                           const val = editingPhoneValue.trim();
                           if (val && users.some(x => x.phone === val && x.id !== u.id)) return alert('Phone already used by another user');
                           try {
-                            await updateUser({ id: u.id, phone: val || null });
+                            // FIX: Changed null to undefined here
+                            await updateUser({ id: u.id, phone: val || undefined });
                             setEditingPhoneId(null); setEditingPhoneValue('');
                             alert('Phone updated');
                           } catch (err: any) {

@@ -633,7 +633,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLoading,
       profileLoading,
       setCoursePlatformMeta, setSessionPlatformMeta,
-      inviteUser
+      inviteUser,
+      updateUser
     }}>
       {children}
     </AppContext.Provider>
