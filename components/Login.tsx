@@ -8,6 +8,7 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
   const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -28,11 +29,24 @@ const Login: React.FC = () => {
           setLoading(false);
           return;
         }
+        if (!phone || phone.trim().length === 0) {
+          setMessage({ text: '请填写手机号', type: 'error' });
+          setLoading(false);
+          return;
+        }
 
         // 检查姓名唯一性（users 表）
         const nameCheck = await supabase.from('users').select('id').eq('name', name).maybeSingle();
         if (nameCheck && nameCheck.data) {
           setMessage({ text: '该姓名已被使用，请更换姓名', type: 'error' });
+          setLoading(false);
+          return;
+        }
+
+        // 检查手机号唯一性（users 表）
+        const phoneCheck = await supabase.from('users').select('id').eq('phone', phone).maybeSingle();
+        if (phoneCheck && phoneCheck.data) {
+          setMessage({ text: '该手机号已被使用，请使用其他手机号', type: 'error' });
           setLoading(false);
           return;
         }
@@ -45,9 +59,9 @@ const Login: React.FC = () => {
           email,
           password,
           options: {
-            // 关键：告诉 Supabase 验证邮件后跳回当前网页，并把 name 写入 auth metadata
+            // 关键：告诉 Supabase 验证邮件后跳回当前网页，并把 name / phone 写入 auth metadata
             emailRedirectTo: redirectTo,
-            data: { name }
+            data: { name, phone }
           }
         });
         if (error) throw error;
@@ -58,7 +72,7 @@ const Login: React.FC = () => {
           const authId = data?.user?.id ?? null;
           // 仅在存在 session 时写入带 auth_id 的用户记录；否则在用户验证并首次登录后由 store 同步插入
           if (authId && data?.session) {
-            await supabase.from('users').insert([{ email, name, role, auth_id: authId }]);
+            await supabase.from('users').insert([{ email, name, phone, role, auth_id: authId }]);
           }
         } catch (e) {
           // 可能由于 RLS 拒绝匿名插入，这里仅记录错误，后续 auth 完成后会同步
@@ -78,15 +92,16 @@ const Login: React.FC = () => {
           const authUser = data?.user ?? (await supabase.auth.getUser()).data.user;
           const authId = authUser?.id;
           const metaName = (authUser as any)?.user_metadata?.name || email;
+          const metaPhone = (authUser as any)?.user_metadata?.phone || null;
           if (authId) {
-            // Use RPC to claim or create the users row (handles historical rows without auth_id)
-            const rpc = await supabase.rpc('claim_or_create_user', { p_email: email, p_name: metaName });
+            // Use RPC to claim or create the users row (handles historical rows without auth_id), include phone metadata if available
+            const rpc = await supabase.rpc('claim_or_create_user', { p_email: email, p_name: metaName, p_phone: metaPhone });
             // rpc returns an array of rows; we don't strictly need the returned value here
             // but we attempt a final fetch to confirm
             const { data: existing } = await supabase.from('users').select('*').eq('email', email).maybeSingle();
             if (!existing) {
               // unexpected, but try direct insert (may be blocked by RLS)
-              await supabase.from('users').insert([{ email, name: metaName, role: 'visitor', auth_id: authId }]);
+              await supabase.from('users').insert([{ email, name: metaName, phone: metaPhone, role: 'visitor', auth_id: authId }]);
             }
           }
         } catch (e) {
@@ -107,8 +122,8 @@ const Login: React.FC = () => {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden relative z-10">
         <div className="bg-indigo-600 p-8 text-center">
-          <h1 className="text-3xl font-bold text-white mb-2">EduTrack Pro</h1>
-          <p className="text-indigo-100">教务管理系统</p>
+          <h1 className="text-3xl font-bold text-white mb-2">启慧研习院</h1>
+          <p className="text-indigo-100">EduSys Lite</p>
         </div>
         
         <div className="p-8">
@@ -144,6 +159,7 @@ const Login: React.FC = () => {
               />
             </div>
             {mode === 'signup' && (
+              <>
               <div>
                 <label className="block text-sm font-medium text-slate-600 mb-1">姓名（必须唯一）</label>
                 <input
@@ -154,6 +170,18 @@ const Login: React.FC = () => {
                   onChange={(e) => setName(e.target.value)}
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">手机号（必须唯一）</label>
+                <input
+                  type="tel"
+                  required
+                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+                <div className="text-xs text-slate-400 mt-1">手机号仅用于与线上平台关联，不会进行短信验证。</div>
+              </div>
+              </>
             )}
             <div>
               <label className="block text-sm font-medium text-slate-600 mb-1">密码</label>

@@ -10,6 +10,7 @@ create table if not exists public.users (
 	auth_id uuid unique,
 	email text not null unique,
 	name text not null unique,
+	phone text unique,
 	role text not null default 'visitor' check (role in ('owner','editor','viewer','visitor')),
 	created_at timestamptz default timezone('utc'::text, now())
 );
@@ -139,20 +140,25 @@ create policy people_viewer_select_own_name on public.people
 -- after the user completes sign-up/login. The function runs as SECURITY DEFINER so that it can
 -- safely set auth_id and role without being blocked by RLS on the target row (the function owner
 -- needs to be a privileged DB role, which is the case when applied via Supabase SQL editor).
-create or replace function public.claim_or_create_user(p_email text, p_name text)
+create or replace function public.claim_or_create_user(p_email text, p_name text, p_phone text DEFAULT NULL)
 returns setof public.users as $$
 begin
-  insert into public.users (auth_id, email, name, role)
-  values (auth.uid(), p_email, p_name, case when p_name = '负责人' then 'owner' else 'visitor' end)
+  insert into public.users (auth_id, email, name, role, phone)
+  values (auth.uid(), p_email, p_name, case when p_name = '负责人' then 'owner' else 'viewer' end, p_phone)
   on conflict (email) do update
     set auth_id = coalesce(public.users.auth_id, auth.uid()),
         name = coalesce(public.users.name, p_name),
+        phone = coalesce(public.users.phone, p_phone),
         role = case when public.users.name = '负责人' or p_name = '负责人' then 'owner' else public.users.role end;
 
   return query select * from public.users where email = p_email;
 end;
 $$ language plpgsql security definer;
 
-grant execute on function public.claim_or_create_user(text, text) to authenticated;
+grant execute on function public.claim_or_create_user(text, text, text) to authenticated;
+
+-- Add platform mapping JSONB columns for external platform synchronization
+alter table if exists public.courses add column if not exists platform_meta jsonb;
+alter table if exists public.sessions add column if not exists platform_meta jsonb;
 
 -- End of supabase schema

@@ -1,13 +1,15 @@
 import React, { useState, useRef } from 'react';
 import { Course } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload } from 'lucide-react';
+import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, RotateCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { syncCourse } from '../services/platformSync';
 import { exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const CourseManager: React.FC = () => {
-  const { courses, teachers, assistants, addCourse, updateCourse, deleteCourse, importData, currentUser } = useAppStore();
+  const { courses, teachers, assistants, addCourse, updateCourse, deleteCourse, importData, currentUser, setCoursePlatformMeta } = useAppStore();
+  const [resyncing, setResyncing] = useState<Record<string, boolean>>({});
   const isViewer = !!(currentUser && currentUser.role === 'viewer');
 
   // If viewer, they are not allowed to access the course management page
@@ -156,9 +158,69 @@ const CourseManager: React.FC = () => {
     { field: 'totalHours', header: 'Hours', type: 'number', width: '90px', editable: false },
     { field: 'defaultStartTime', header: 'Def. Start', type: 'text', width: '90px' },
     { field: 'defaultEndTime', header: 'Def. End', type: 'text', width: '90px' },
+    { field: 'syncStatus', header: 'Sync', type: 'text', width: '220px', editable: false },
+    { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '160px', editable: false },
+    { field: 'syncAction', header: '', type: 'text', width: '120px', editable: false }
   ];
 
   const filteredCourses = courses.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  const formatPlatformSummary = (meta: Record<string, any> | undefined) => {
+    if (!meta) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
+    const entries = Object.entries(meta) as [string, any][];
+    if (entries.length === 0) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
+    let status: 'ok' | 'error' | 'partial' = 'ok';
+    let last: string | null = null;
+    const badges: React.ReactNode[] = [];
+    entries.forEach(([plat, obj]) => {
+      const s = obj.status || (obj.courseId || obj.sessionId ? 'ok' : 'error');
+      if (s === 'error') status = 'error';
+      if (s !== 'error' && status !== 'error') status = 'ok';
+      const t = obj.lastSyncedAt || obj.lastSynced || null;
+      if (t) {
+        if (!last || new Date(t) > new Date(last)) last = t;
+      }
+      const color = s === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50';
+      badges.push(<span key={plat} className={`px-2 py-0.5 rounded-full text-xs ${color} border ${s === 'error' ? 'border-red-100' : 'border-green-100'} mr-2`}>{plat}</span>);
+    });
+
+    const jsx = <div className="flex items-center">{badges}</div>;
+    return { status, lastSynced: last, jsx };
+  };
+
+  const gridData = filteredCourses.map(c => {
+    const summary = formatPlatformSummary((c as any).platformMeta);
+    const lastSynced = summary.lastSynced ? new Date(summary.lastSynced).toLocaleString() : '';
+    const statusLabel = summary.status === 'ok' ? (<div className="flex items-center gap-2"><CheckCircle className="text-green-600" size={14}/> <span className="text-xs text-slate-700">OK</span> </div>) : summary.status === 'error' ? (<div className="flex items-center gap-2"><AlertTriangle className="text-red-600" size={14}/> <span className="text-xs text-red-600">Error</span></div>) : (<span className="text-xs text-slate-400">N/A</span>);
+
+    const syncAction = (
+      <div className="flex items-center gap-2">
+        <button onClick={async () => {
+          setResyncing(prev => ({ ...prev, [c.id]: true }));
+          try {
+            const results = await syncCourse('update', c);
+            if (results && results.length) {
+              const platformMeta: Record<string, any> = {};
+              results.forEach(r => { platformMeta[r.platform] = r; });
+              await setCoursePlatformMeta(c.id, platformMeta);
+              alert('Resync completed.');
+            } else {
+              alert('Resync completed: no results from platform (or feature not configured).');
+            }
+          } catch (e:any) {
+            console.error('Resync failed:', e);
+            alert('Resync failed: ' + (e.message || e));
+          } finally {
+            setResyncing(prev => ({ ...prev, [c.id]: false }));
+          }
+        }} className="px-2 py-1 text-xs border rounded hover:bg-slate-50 flex items-center gap-2">
+          {resyncing[c.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span>
+        </button>
+      </div>
+    );
+
+    return { ...c, syncStatus: statusLabel, lastSynced, syncAction, platformMeta: (c as any).platformMeta };
+  });
 
   return (
     <>
@@ -185,7 +247,7 @@ const CourseManager: React.FC = () => {
 
       <div className="flex-1 overflow-auto rounded-lg border-slate-200">
         {viewMode === 'grid' ? (
-           <DataGrid data={filteredCourses} columns={gridColumns} onUpdate={handleGridUpdate} onAddRow={handleAddRow} onDeleteRows={handleDeleteRows} />
+           <DataGrid data={gridData} columns={gridColumns} onUpdate={handleGridUpdate} onAddRow={handleAddRow} onDeleteRows={handleDeleteRows} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
              {filteredCourses.map(c => (
@@ -220,6 +282,54 @@ const CourseManager: React.FC = () => {
                     <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">{c.teacherIds.length} Teachers</span>
                     <span className="bg-green-50 text-green-700 px-2 py-0.5 rounded-full">{c.assistantIds.length} TAs</span>
                   </div>
+
+                  <div className="mt-3 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const pm = (c as any).platformMeta;
+                        if (!pm) return <span className="text-xs text-slate-400">Sync: N/A</span>;
+                        const keys = Object.keys(pm);
+                        if (keys.length === 0) return <span className="text-xs text-slate-400">Sync: N/A</span>;
+                        return keys.map(k => {
+                          const entry = pm[k];
+                          const s = entry?.status || (entry.courseId ? 'ok' : 'error');
+                          return <span key={k} className={`px-2 py-0.5 rounded-full text-xs ${s === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50'} border ${s === 'error' ? 'border-red-100' : 'border-green-100'}`}>{k}</span>;
+                        })
+                      })()}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="text-slate-400 text-xs">{(() => {
+                        const pm = (c as any).platformMeta;
+                        if (!pm) return '—';
+                        const last = Object.values(pm).map((x:any) => x.lastSyncedAt || x.lastSynced).filter(Boolean).sort().reverse()[0];
+                        return last ? new Date(last).toLocaleString() : '—';
+                      })()}</div>
+
+                      <button onClick={async () => {
+                        setResyncing(prev => ({ ...prev, [c.id]: true }));
+                        try {
+                          const results = await syncCourse('update', c);
+                          if (results && results.length) {
+                            const platformMeta: Record<string, any> = {};
+                            results.forEach(r => { platformMeta[r.platform] = r; });
+                            await setCoursePlatformMeta(c.id, platformMeta);
+                            alert('Resync completed.');
+                          } else {
+                            alert('Resync completed: no results from platform (or feature not configured).');
+                          }
+                        } catch (e:any) {
+                          console.error('Resync failed:', e);
+                          alert('Resync failed: ' + (e.message || e));
+                        } finally {
+                          setResyncing(prev => ({ ...prev, [c.id]: false }));
+                        }
+                      }} className="px-2 py-1 border rounded text-xs hover:bg-slate-50 flex items-center gap-2">
+                        {resyncing[c.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span>
+                      </button>
+                    </div>
+                  </div>
+
                   {c.startDate && <div className="text-xs text-slate-400 mt-2 text-right">{c.startDate} to {c.endDate}</div>}
                 </div>
               </div>

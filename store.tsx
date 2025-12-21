@@ -29,7 +29,7 @@ const DB_SCHEMA = {
   ]
   ,
   // 用户表：用于权限管理（与 Auth 整合）
-  users: ['id', 'email', 'name', 'role']
+  users: ['id', 'email', 'name', 'phone', 'role']
 };
 
 // --- 2. 数据清洗函数 (Sanitizer) ---
@@ -64,7 +64,11 @@ interface AppContextType extends AppState {
   currentUser: UserRecord | null;
   isEditor: boolean;
   updateUserRole: (userId: string, role: Role) => Promise<void>;
-  inviteUser: (email: string, name: string, role?: Role) => Promise<boolean>;
+  inviteUser: (email: string, name: string, role?: Role, phone?: string) => Promise<boolean>;
+  updateUser: (u: Partial<UserRecord> & { id: string }) => Promise<void>;
+  // 新增：用于手动保存平台同步元信息
+  setCoursePlatformMeta: (courseId: string, platformMeta: Record<string, any>) => void;
+  setSessionPlatformMeta: (sessionId: string, platformMeta: Record<string, any>) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -108,10 +112,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const courses = coursesRaw.map(c => {
              const cSessions = sessions.filter(s => s.courseId === c.id);
              const totalHours = cSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
+             // normalize platform_meta (DB) to platformMeta (frontend)
+             const platformMeta = (c as any).platform_meta ? (c as any).platform_meta : undefined;
              return {
                  ...c,
                  sessionCount: cSessions.length,
-                 totalHours: parseFloat(totalHours.toFixed(2))
+                 totalHours: parseFloat(totalHours.toFixed(2)),
+                 platformMeta
              };
         });
 
@@ -242,11 +249,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --- 课程管理 (Course) ---
   const addCourse = async (c: Course) => {
+    // Optimistic local add
     setState(prev => ({ ...prev, courses: [...prev.courses, c] }));
     
     const payload = sanitize(c, 'courses');
-    const { error } = await supabase.from('courses').insert([payload]);
-    if (error) console.error("Add Course Error:", error);
+    // Insert and request returned row to capture server defaults
+    const { data, error } = await supabase.from('courses').insert([payload]).select('*');
+    if (error) {
+      console.error("Add Course Error:", error);
+      return;
+    }
+
+    const created = Array.isArray(data) && data.length > 0 ? (data[0] as Course) : c;
+    // Replace optimistic row with authoritative row
+    setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === c.id ? created : x) }));
+
+    // Trigger platform sync (non-blocking)
+    try {
+      const results = await import('./services/platformSync').then(m => m.syncCourse('create', created));
+      if (results && results.length) {
+        const platformMeta: Record<string, any> = {};
+        results.forEach(r => { platformMeta[r.platform] = r; });
+        const { error: e2 } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', created.id);
+        if (e2) console.error('Save platform_meta failed:', e2);
+        else setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === created.id ? { ...x, platformMeta } : x) }));
+      }
+    } catch (e) {
+      console.error('Platform sync (create course) error:', e);
+    }
   };
 
   const updateCourse = async (c: Course) => {
@@ -254,8 +284,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     const payload = sanitize(c, 'courses');
     delete payload.id;
-    const { error } = await supabase.from('courses').update(payload).eq('id', c.id);
-    if (error) console.error("Update Course Error:", error);
+    const { data, error } = await supabase.from('courses').update(payload).eq('id', c.id).select('*');
+    if (error) {
+      console.error("Update Course Error:", error);
+      return;
+    }
+
+    const updated = Array.isArray(data) && data.length > 0 ? (data[0] as Course) : c;
+
+    // Trigger platform sync (non-blocking)
+    try {
+      const results = await import('./services/platformSync').then(m => m.syncCourse('update', updated));
+      if (results && results.length) {
+        const platformMeta: Record<string, any> = {};
+        results.forEach(r => { platformMeta[r.platform] = r; });
+        const { error: e2 } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', updated.id);
+        if (e2) console.error('Save platform_meta failed:', e2);
+        else setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === updated.id ? { ...x, platformMeta } : x) }));
+      }
+    } catch (e) {
+      console.error('Platform sync (update course) error:', e);
+    }
   };
   
   const deleteCourse = async (id: string) => {
@@ -278,8 +327,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     
     const payload = sanitize(s, 'sessions');
-    const { error } = await supabase.from('sessions').insert([payload]);
-    if (error) console.error("Add Session Error:", error);
+    const { data, error } = await supabase.from('sessions').insert([payload]).select('*');
+    if (error) {
+      console.error("Add Session Error:", error);
+      return;
+    }
+
+    const created = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : s;
+    // Replace optimistic session with authoritative one
+    setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === s.id ? created : x) }));
+
+    // Trigger platform sync (non-blocking)
+    try {
+      const results = await import('./services/platformSync').then(m => m.syncSession('create', created));
+      if (results && results.length) {
+        const platformMeta: Record<string, any> = {};
+        results.forEach(r => { platformMeta[r.platform] = r; });
+        const { error: e2 } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', created.id);
+        if (e2) console.error('Save platform_meta failed:', e2);
+        else setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === created.id ? { ...x, platformMeta } : x) }));
+      }
+    } catch (e) {
+      console.error('Platform sync (create session) error:', e);
+    }
   };
 
   const updateSession = async (s: Session) => {
@@ -295,8 +365,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     const payload = sanitize(s, 'sessions');
     delete payload.id;
-    const { error } = await supabase.from('sessions').update(payload).eq('id', s.id);
-    if (error) console.error("Update Session Error:", error);
+    const { data, error } = await supabase.from('sessions').update(payload).eq('id', s.id).select('*');
+    if (error) {
+      console.error("Update Session Error:", error);
+      return;
+    }
+
+    const updated = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : s;
+
+    // Trigger platform sync (non-blocking)
+    try {
+      const results = await import('./services/platformSync').then(m => m.syncSession('update', updated));
+      if (results && results.length) {
+        const platformMeta: Record<string, any> = {};
+        results.forEach(r => { platformMeta[r.platform] = r; });
+        const { error: e2 } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', updated.id);
+        if (e2) console.error('Save platform_meta failed:', e2);
+        else setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === updated.id ? { ...x, platformMeta } : x) }));
+      }
+    } catch (e) {
+      console.error('Platform sync (update session) error:', e);
+    }
   };
 
   const deleteSession = async (id: string) => {
@@ -319,6 +408,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           scheduleParams: { ...prev.scheduleParams, ...params }
       }));
   }
+
+  // Persist platform_meta for a course (used by manual resync UI)
+  const setCoursePlatformMeta = async (courseId: string, platformMeta: Record<string, any>) => {
+    try {
+      const { error } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', courseId);
+      if (error) {
+        console.error('setCoursePlatformMeta error:', error);
+        return;
+      }
+      setState(prev => ({ ...prev, courses: prev.courses.map(c => c.id === courseId ? { ...c, platformMeta } : c) }));
+    } catch (e) {
+      console.error('setCoursePlatformMeta exception:', e);
+    }
+  };
+
+  // Persist platform_meta for a session (used by manual resync UI)
+  const setSessionPlatformMeta = async (sessionId: string, platformMeta: Record<string, any>) => {
+    try {
+      const { error } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', sessionId);
+      if (error) {
+        console.error('setSessionPlatformMeta error:', error);
+        return;
+      }
+      setState(prev => ({ ...prev, sessions: prev.sessions.map(s => s.id === sessionId ? { ...s, platformMeta } : s) }));
+    } catch (e) {
+      console.error('setSessionPlatformMeta exception:', e);
+    }
+  };
+
 
   // --- 数据导入 (Batch) ---
   const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => {
@@ -458,13 +576,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.error('updateUserRole error:', err);
     }
   };
+
+  // 通用更新用户（用于修改 phone / name / role）
+  const updateUser = async (u: Partial<UserRecord> & { id: string }) => {
+    if (!currentUser || currentUser.role !== 'owner') {
+      console.warn('updateUser requires owner privileges');
+      return;
+    }
+
+    try {
+      const payload = sanitize(u, 'users');
+      delete (payload as any).id;
+      const { error } = await supabase.from('users').update(payload).eq('id', u.id);
+      if (error) {
+        console.error('updateUser error:', error);
+        throw error;
+      }
+      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ...u } as UserRecord : x));
+      if (currentUser && currentUser.id === u.id) {
+        setCurrentUser(prev => prev ? { ...prev, ...u } as UserRecord : prev);
+      }
+    } catch (err) {
+      console.error('updateUser exception', err);
+      throw err;
+    }
+  };
+
   // Invite / create a user (owner-only)
-  const inviteUser = async (email: string, name: string, role: Role = 'visitor') => {
+  const inviteUser = async (email: string, name: string, role: Role = 'visitor', phone?: string) => {
     if (!currentUser || currentUser.role !== 'owner') {
       throw new Error('Only owner can invite users');
     }
     try {
-      const payload = sanitize({ email, name, role }, 'users');
+      const payload = sanitize({ email, name, role, phone }, 'users');
       const { error } = await supabase.from('users').insert([payload]);
       if (error) throw error;
       const usersFetch = await supabase.from('users').select('*');
@@ -488,6 +632,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       importData, updateScheduleParams,
       isLoading,
       profileLoading,
+      setCoursePlatformMeta, setSessionPlatformMeta,
       inviteUser
     }}>
       {children}

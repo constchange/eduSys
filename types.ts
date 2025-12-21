@@ -28,6 +28,17 @@ export interface Person {
   type: 'Teacher' | 'TA';
 }
 
+export type Platform = 'tencent' | 'classin';
+
+export interface PlatformMetaEntry {
+  platform: Platform;
+  courseId?: string;
+  sessionId?: string;
+  lastSyncedAt?: string; // ISO
+  status?: 'ok' | 'error';
+  message?: string;
+}
+
 export interface Course {
   id: string;
   name: string;
@@ -50,6 +61,9 @@ export interface Course {
   teacherIds: string[];
   assistantIds: string[];
   notes: string;
+
+  // Optional mapping to external platform IDs/status
+  platformMeta?: Record<string, PlatformMetaEntry>;
 }
 
 export interface Session {
@@ -64,6 +78,9 @@ export interface Session {
   endTime: string;   // HH:mm
   durationHours: number;
   notes: string;
+
+  // 外部平台映射
+  platformMeta?: Record<string, PlatformMetaEntry>;
 }
 
 export interface ScheduleParams {
@@ -86,5 +103,6 @@ export interface UserRecord {
   id: string;
   email: string;
   name: string;
+  phone?: string;
   role: Role;
 }
