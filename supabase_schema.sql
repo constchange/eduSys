@@ -9,7 +9,7 @@ create table if not exists public.users (
 	id uuid primary key default gen_random_uuid(),
 	auth_id uuid unique,
 	email text not null unique,
-	name text not null unique,
+	name text not null,
 	phone text unique,
 	role text not null default 'visitor' check (role in ('owner','editor','viewer','visitor')),
 	created_at timestamptz default timezone('utc'::text, now())
