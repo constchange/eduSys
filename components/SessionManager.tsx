@@ -1,15 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Session, Course } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, AlertTriangle, Download, X, CalendarRange, Table, LayoutGrid, Upload, List, RotateCw, CheckCircle, AlertOctagon } from 'lucide-react';
-import { syncSession } from '../services/platformSync';
+import { Plus, Edit, Trash2, AlertTriangle, Download, X, CalendarRange, Table, LayoutGrid, Upload, List, Users } from 'lucide-react';
 import { calculateDuration, checkConflicts, exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const SessionManager: React.FC = () => {
-  const { sessions, courses, teachers, assistants, addSession, updateSession, deleteSession, importData, currentUser, setSessionPlatformMeta } = useAppStore();
-  const [resyncingSessions, setResyncingSessions] = useState<Record<string, boolean>>({});
+  const { sessions, courses, students, teachers, assistants, addSession, updateSession, deleteSession, importData, currentUser } = useAppStore();
   const isViewer = !!(currentUser && currentUser.role === 'viewer');
 
   // Viewers should not access the sessions management page directly
@@ -103,6 +101,11 @@ const SessionManager: React.FC = () => {
       setIsModalOpen(false);
   };
 
+  const [isAttModalOpen, setIsAttModalOpen] = useState(false);
+  const [attendeePhonesText, setAttendeePhonesText] = useState('');
+  const [currentAttSessionId, setCurrentAttSessionId] = useState<string | null>(null);
+  const attFileRef = useRef<HTMLInputElement>(null);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (warnings.length > 0) {
@@ -128,6 +131,59 @@ const SessionManager: React.FC = () => {
     }
     performSave();
   };
+
+  // --- Attendees helper (edit only at session level) ---
+  const openAttendeesEditor = (session?: Session) => {
+    if (session) {
+      setCurrentAttSessionId(session.id);
+      const phones = (session.attendingStudentIds || []).map(id => {
+        const s = (students || []).find((x: any) => x.id === id);
+        return s?.phone || '';
+      }).filter(Boolean);
+      setAttendeePhonesText(phones.join(', '));
+    } else {
+      setCurrentAttSessionId(null);
+      setAttendeePhonesText('');
+    }
+    setIsAttModalOpen(true);
+  };
+
+  const handleAttImport = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = String(evt.target?.result || '').trim();
+      if (!text) return;
+      // Try CSV parse
+      const rows = text.split(/\r?\n/).map(r => r.trim()).filter(Boolean);
+      // If contains commas, take first column
+      const phones: string[] = rows.map(r => r.includes(',') ? r.split(',')[0].trim() : r);
+      setAttendeePhonesText(prev => (prev ? prev + '\n' + phones.join(', ') : phones.join(', ')));
+      if (attFileRef.current) attFileRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const exportAttendees = (sessionId?: string) => {
+    const ids = sessionId ? (sessions.find(s => s.id === sessionId)?.attendingStudentIds || []) : [];
+    const phones = (students || []).filter(s => ids.includes(s.id)).map(s => ({ phone: s.phone || '' }));
+    if (phones.length === 0) return alert('No attendees to export');
+    exportToCSV(phones, `attendees_${sessionId || 'list'}`);
+  };
+
+  const applyAttendeesToSession = (sessionId: string, phonesText: string) => {
+    // Parse phone list (commas or spaces)
+    const phones = phonesText.split(/[,\s]+/).map(p => p.trim()).filter(Boolean);
+    // Map phones to student ids
+    const studentsList = (students || []);
+    const ids = phones.map(ph => studentsList.find(s => s.phone === ph)?.id).filter((id): id is string => !!id);
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return;
+    updateSession({ ...session, attendingStudentIds: ids });
+    setIsAttModalOpen(false);
+    setCurrentAttSessionId(null);
+  };
+
+
 
   const handleBatchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -260,63 +316,19 @@ const SessionManager: React.FC = () => {
     return ids.map(id => list.find(p => p.id === id)?.name).filter((n): n is string => !!n);
   };
 
-  const filteredSessions = (selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions).filter(s => sessionMatchesViewer(s));
-
-  const formatPlatformSummary = (meta: Record<string, any> | undefined) => {
-    if (!meta) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
-    const entries = Object.entries(meta) as [string, any][];
-    if (entries.length === 0) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
-    let status: 'ok' | 'error' | 'partial' = 'ok';
-    let last: string | null = null;
-    const badges: React.ReactNode[] = [];
-    entries.forEach(([plat, obj]) => {
-      const s = obj.status || (obj.courseId || obj.sessionId ? 'ok' : 'error');
-      if (s === 'error') status = 'error';
-      if (s !== 'error' && status !== 'error') status = 'ok';
-      const t = obj.lastSyncedAt || obj.lastSynced || null;
-      if (t) {
-        if (!last || new Date(t) > new Date(last)) last = t;
-      }
-      const color = s === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50';
-      badges.push(<span key={plat} className={`px-2 py-0.5 rounded-full text-xs ${color} border ${s === 'error' ? 'border-red-100' : 'border-green-100'} mr-2`}>{plat}</span>);
-    });
-
-    const jsx = <div className="flex items-center">{badges}</div>;
-    return { status, lastSynced: last, jsx };
-  };
-
-  const gridData = filteredSessions.map(s => {
-    const summary = formatPlatformSummary((s as any).platformMeta);
-    const lastSynced = summary.lastSynced ? new Date(summary.lastSynced).toLocaleString() : '';
-    const statusLabel = summary.status === 'ok' ? (<div className="flex items-center gap-2"><CheckCircle className="text-green-600" size={14}/> <span className="text-xs text-slate-700">OK</span> </div>) : summary.status === 'error' ? (<div className="flex items-center gap-2"><AlertOctagon className="text-red-600" size={14}/> <span className="text-xs text-red-600">Error</span></div>) : (<span className="text-xs text-slate-400">N/A</span>);
-
-    const syncAction = (
-      <div className="flex items-center gap-2">
-        <button onClick={async () => {
-          setResyncingSessions(prev => ({ ...prev, [s.id]: true }));
-          try {
-            const results = await syncSession('update', s);
-            if (results && results.length) {
-              const platformMeta: Record<string, any> = {};
-              results.forEach(r => { platformMeta[r.platform] = r; });
-              await setSessionPlatformMeta(s.id, platformMeta);
-              alert('Resync completed.');
-            } else {
-              alert('Resync completed: no results from platform (or feature not configured).');
-            }
-          } catch (e:any) {
-            console.error('Resync failed:', e);
-            alert('Resync failed: ' + (e.message || e));
-          } finally {
-            setResyncingSessions(prev => ({ ...prev, [s.id]: false }));
-          }
-        }} className="px-2 py-1 text-xs border rounded hover:bg-slate-50 flex items-center gap-2">
-          {resyncingSessions[s.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span>
-        </button>
-      </div>
-    );
-
-    return { ...s, syncStatus: statusLabel, lastSynced, syncAction, platformMeta: (s as any).platformMeta };
+  const filteredSessions = (selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions).filter(s => sessionMatchesViewer(s)).map(s => {
+    const meta = (s as any).platformMeta || {};
+    const entries = Object.values(meta) as any[];
+    let syncStatus = '—';
+    let lastSynced = '-';
+    if (entries.length > 0) {
+      if (entries.some(e => e.status === 'error')) syncStatus = 'error';
+      else if (entries.some(e => e.status === 'ok')) syncStatus = 'ok';
+      else syncStatus = 'unknown';
+      const times = entries.map(e => e.lastSyncedAt || e.lastSynced || null).filter(Boolean) as string[];
+      if (times.length > 0) lastSynced = new Date(Math.max(...times.map(t => new Date(t).getTime()))).toLocaleString();
+    }
+    return { ...s, syncStatus, lastSynced };
   });
 
   const gridColumns: GridColumn[] = [
@@ -347,9 +359,8 @@ const SessionManager: React.FC = () => {
         width: '150px' 
     },
     { field: 'notes', header: 'Notes', type: 'text', width: '150px' },
-    { field: 'syncStatus', header: 'Sync', type: 'text', width: '220px', editable: false },
-    { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '160px', editable: false },
-    { field: 'syncAction', header: '', type: 'text', width: '120px', editable: false }
+    { field: 'syncStatus', header: 'Sync', type: 'text', width: '120px', editable: false },
+    { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '140px', editable: false },
   ];
 
   return (
@@ -400,15 +411,12 @@ const SessionManager: React.FC = () => {
                  <div className="w-32">Time</div>
                  <div className="flex-1">Course & Topic</div>
                  <div className="flex-1">Staff</div>
-                 <div className="w-52 text-right">Sync / Actions</div>
+                 <div className="w-20 text-right">Actions</div>
              </div>
              {filteredSessions.sort((a,b) => a.sequence - b.sequence).map(s => {
                  const c = courses.find(x => x.id === s.courseId);
                  const tNames = getNames(s.teacherIds, 'T');
                  const aNames = getNames(s.assistantIds, 'A');
-                 const pm = (s as any).platformMeta;
-                 const keys = pm ? Object.keys(pm) : [];
-                 const last = pm ? Object.values(pm).map((x:any) => x.lastSyncedAt || x.lastSynced).filter(Boolean).sort().reverse()[0] : null;
                  return (
                   <div key={s.id} className="border-b p-3 hover:bg-slate-50 flex gap-4 items-center group">
                       <div className="w-12 text-center font-bold text-slate-400">#{s.sequence}</div>
@@ -430,45 +438,32 @@ const SessionManager: React.FC = () => {
                             </div>
                           )}
                       </div>
-                      <div className="w-52 flex items-center justify-end gap-3 text-xs">
-                        <div className="flex items-center gap-2">
-                          {keys.length === 0 ? <span className="text-slate-400">Sync: N/A</span> : keys.map(k => {
-                            const entry = pm[k];
-                            const s2 = entry?.status || (entry.sessionId ? 'ok' : 'error');
-                            return <span key={k} className={`px-2 py-0.5 rounded-full text-xs ${s2 === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50'} border ${s2 === 'error' ? 'border-red-100' : 'border-green-100'}`}>{k}</span>
-                          })}
-                          <div className="text-slate-400 ml-2">{last ? new Date(last).toLocaleString() : '—'}</div>
-                        </div>
-
-                        <div className="flex gap-1">
-                          <button onClick={async () => {
-                            setResyncingSessions(prev => ({ ...prev, [s.id]: true }));
-                            try {
-                              const results = await syncSession('update', s);
-                              if (results && results.length) {
-                                const platformMeta: Record<string, any> = {};
-                                results.forEach(r => { platformMeta[r.platform] = r; });
-                                await setSessionPlatformMeta(s.id, platformMeta);
-                                alert('Resync completed.');
-                              } else {
-                                alert('Resync completed: no results from platform (or feature not configured).');
-                              }
-                            } catch (e:any) {
-                              console.error('Resync failed:', e);
-                              alert('Resync failed: ' + (e.message || e));
-                            } finally {
-                              setResyncingSessions(prev => ({ ...prev, [s.id]: false }));
-                            }
-                          }} className="px-2 py-1 border rounded text-xs hover:bg-slate-50 flex items-center gap-2">{resyncingSessions[s.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span></button>
-                          {!isViewer && <button onClick={() => handleOpenModal(s)} className="px-2 py-1 border rounded text-xs">Edit</button>}
-                        </div>
+                      <div className="w-20 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {!isViewer && <button onClick={() => handleOpenModal(s)} className="p-1.5 text-blue-600 hover:bg-blue-100 rounded"><Edit size={16} /></button>}
+                        {!isViewer && <button onClick={() => openAttendeesEditor(s)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="Edit Attendees"><Users size={16} /></button>}
+                        {!isViewer && <button onClick={() => handleDelete(s.id)} className="p-1.5 text-red-600 hover:bg-red-100 rounded"><Trash2 size={16} /></button>}
                       </div>
-                  </div>
-                );
+                      <div className="w-48 text-right">
+                        { (s as any).platformMeta && Object.keys((s as any).platformMeta).length > 0 ? (
+                          <div className="flex justify-end gap-2 items-center">
+                            {Object.entries((s as any).platformMeta).map(([k, v]: any) => (
+                              <div key={k} className={`text-[11px] px-2 py-1 rounded border ${v.status === 'ok' ? 'bg-green-50 text-green-700 border-green-100' : v.status === 'error' ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                                <div className="font-medium">{k}</div>
+                                <div className="text-[10px]">{v.status}{v.lastSyncedAt ? ` • ${new Date(v.lastSyncedAt).toLocaleString()}` : ''}</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-400">未同步</div>
+                        )}
+                      </div>
+                    </div>
+                  );
               })}
-              {filteredSessions.length === 0 && <div className="p-8 text-center text-slate-400">No sessions found.</div>}
           </div>
         )}
+
+
       </div>
 
       {isModalOpen && (
@@ -513,7 +508,34 @@ const SessionManager: React.FC = () => {
           </div>
         </div>
       )}
-      
+
+      {/* Attendees Modal */}
+      {isAttModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+            <div className="p-4 border-b flex justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold">Edit Attendees</h3><button onClick={() => { setIsAttModalOpen(false); setCurrentAttSessionId(null); }}><X size={20} /></button></div>
+            <div className="p-4 grid grid-cols-1 gap-4">
+              <div>
+                <div className="text-sm text-slate-500 mb-2">Paste attendee phone numbers (comma / space / newline separated)</div>
+                <textarea className="w-full p-2 border rounded h-36" value={attendeePhonesText} onChange={e => setAttendeePhonesText(e.target.value)} />
+              </div>
+
+              <div className="flex gap-2 items-center">
+                <input type="file" ref={attFileRef} hidden accept=".csv,.txt" onChange={e => e.target.files?.[0] && handleAttImport(e.target.files[0])} />
+                <button onClick={() => attFileRef.current?.click()} className="px-3 py-2 border rounded">Import CSV</button>
+                <button onClick={() => exportAttendees(currentAttSessionId || undefined)} className="px-3 py-2 border rounded">Export Current</button>
+                <div className="flex-1 text-xs text-slate-500">Mapping is performed by student phone; phones not found are ignored.</div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2 border-t">
+                <button onClick={() => { setIsAttModalOpen(false); setCurrentAttSessionId(null); }} className="px-4 py-2 border rounded">Cancel</button>
+                <button onClick={() => currentAttSessionId && applyAttendeesToSession(currentAttSessionId, attendeePhonesText)} className="px-4 py-2 bg-indigo-600 text-white rounded">Save Attendees</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConfirmModal 
         isOpen={!!confirmConfig}
         title={confirmConfig?.title || ''}

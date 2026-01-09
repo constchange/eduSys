@@ -7,9 +7,12 @@ import CourseManager from './components/CourseManager';
 import SessionManager from './components/SessionManager';
 import ScheduleStats from './components/ScheduleStats';
 import AdminPanel from './components/AdminPanel';
-import { Users, GraduationCap, BookOpen, Clock, Calendar, LogOut, Loader2 } from 'lucide-react';
+import StudentManager from './components/StudentManager';
+import ClientManager from './components/ClientManager';
+import SchoolManager from './components/SchoolManager';
+import { Users, GraduationCap, BookOpen, Clock, Calendar, LogOut, Loader2, User, MapPin } from 'lucide-react';
 
-type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule' | 'admin';
+type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule' | 'admin' | 'students' | 'clients' | 'schools';
 
 // 内部组件：主界面
 const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, onLogout }) => {
@@ -31,6 +34,10 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
     { id: 'courses', label: 'Courses', icon: BookOpen },
     { id: 'sessions', label: 'Sessions', icon: Clock },
     { id: 'schedule', label: 'Schedule & Stats', icon: Calendar },
+    // New pages
+    { id: 'students', label: 'Students', icon: Users },
+    { id: 'clients', label: 'Clients', icon: User },
+    { id: 'schools', label: 'Schools', icon: MapPin }
   ];
 
   // 如果是负责人，允许访问用户管理
@@ -114,6 +121,9 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
             {activeTab === 'courses' && <CourseManager />}
             {activeTab === 'sessions' && <SessionManager />}
             {activeTab === 'schedule' && <ScheduleStats />}
+            {activeTab === 'students' && <StudentManager />}
+            {activeTab === 'clients' && <ClientManager />}
+            {activeTab === 'schools' && <SchoolManager />}
             {activeTab === 'admin' && <AdminPanel />}
           </div>
         </main>

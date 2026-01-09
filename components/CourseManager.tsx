@@ -1,15 +1,13 @@
 import React, { useState, useRef } from 'react';
 import { Course } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, RotateCw, CheckCircle, AlertTriangle } from 'lucide-react';
-import { syncCourse } from '../services/platformSync';
+import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, Users } from 'lucide-react';
 import { exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const CourseManager: React.FC = () => {
-  const { courses, teachers, assistants, addCourse, updateCourse, deleteCourse, importData, currentUser, setCoursePlatformMeta } = useAppStore();
-  const [resyncing, setResyncing] = useState<Record<string, boolean>>({});
+  const { courses, teachers, assistants, students = [], sessions, addCourse, updateCourse, deleteCourse, updateSession, importData, currentUser } = useAppStore();
   const isViewer = !!(currentUser && currentUser.role === 'viewer');
 
   // If viewer, they are not allowed to access the course management page
@@ -46,6 +44,57 @@ const CourseManager: React.FC = () => {
   };
 
   const [formData, setFormData] = useState<Course>(initialForm);
+  const [isCourseAttModalOpen, setIsCourseAttModalOpen] = useState(false);
+  const [courseAttPhonesText, setCourseAttPhonesText] = useState('');
+  const [currentCourseForAtt, setCurrentCourseForAtt] = useState<string | null>(null);
+  const courseAttFileRef = useRef<HTMLInputElement>(null);
+
+  const openCourseAttEditor = (course?: Course) => {
+    if (course) {
+      setCurrentCourseForAtt(course.id);
+      // aggregate phones from all sessions
+      const sIds = (sessions || []).filter(ss => ss.courseId === course.id).flatMap(ss => ss.attendingStudentIds || [] as string[]);
+      const unique = Array.from(new Set(sIds));
+      const phones = students.filter(st => unique.includes(st.id)).map(st => st.phone || '').filter(Boolean);
+      setCourseAttPhonesText(phones.join(', '));
+    } else {
+      setCurrentCourseForAtt(null);
+      setCourseAttPhonesText('');
+    }
+    setIsCourseAttModalOpen(true);
+  };
+
+  const handleCourseAttImport = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const text = String(evt.target?.result || '').trim();
+      if (!text) return;
+      const rows = text.split(/\r?\n/).map(r => r.trim()).filter(Boolean);
+      const phones = rows.map(r => r.includes(',') ? r.split(',')[0].trim() : r);
+      setCourseAttPhonesText(prev => (prev ? prev + '\n' + phones.join(', ') : phones.join(', ')));
+      if (courseAttFileRef.current) courseAttFileRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const exportCourseAttendees = (courseId?: string) => {
+    const sIds = (sessions || []).filter(ss => ss.courseId === courseId).flatMap(ss => ss.attendingStudentIds || [] as string[]);
+    const unique = Array.from(new Set(sIds));
+    const phones = students.filter(st => unique.includes(st.id)).map(st => ({ phone: st.phone || '' }));
+    if (phones.length === 0) return alert('No attendees to export');
+    exportToCSV(phones, `course_attendees_${courseId}`);
+  };
+
+  const applyAttendeesToCourse = (courseId: string, phonesText: string) => {
+    const phones = phonesText.split(/[,\s]+/).map(p => p.trim()).filter(Boolean);
+    const ids = phones.map(ph => students.find(s => s.phone === ph)?.id).filter((id): id is string => !!id);
+    // Update every session for this course
+    const courseSessions = (sessions || []).filter(s => s.courseId === courseId);
+    courseSessions.forEach(sess => updateSession({ ...sess, attendingStudentIds: ids }));
+    // Sync course attending student aggregation will happen via updateSession's syncCourseAttendees calls
+    setIsCourseAttModalOpen(false);
+    setCurrentCourseForAtt(null);
+  };
 
   const handleOpenModal = (course?: Course) => {
     if (course) {
@@ -158,69 +207,26 @@ const CourseManager: React.FC = () => {
     { field: 'totalHours', header: 'Hours', type: 'number', width: '90px', editable: false },
     { field: 'defaultStartTime', header: 'Def. Start', type: 'text', width: '90px' },
     { field: 'defaultEndTime', header: 'Def. End', type: 'text', width: '90px' },
-    { field: 'syncStatus', header: 'Sync', type: 'text', width: '220px', editable: false },
-    { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '160px', editable: false },
-    { field: 'syncAction', header: '', type: 'text', width: '120px', editable: false }
+    { field: 'syncStatus', header: 'Sync', type: 'text', width: '160px', editable: false },
+    { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '160px', editable: false }
   ];
 
-  const filteredCourses = courses.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-  const formatPlatformSummary = (meta: Record<string, any> | undefined) => {
-    if (!meta) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
-    const entries = Object.entries(meta) as [string, any][];
-    if (entries.length === 0) return {status: 'unknown', lastSynced: null, jsx: <span className="text-xs text-slate-400">N/A</span>};
-    let status: 'ok' | 'error' | 'partial' = 'ok';
-    let last: string | null = null;
-    const badges: React.ReactNode[] = [];
-    entries.forEach(([plat, obj]) => {
-      const s = obj.status || (obj.courseId || obj.sessionId ? 'ok' : 'error');
-      if (s === 'error') status = 'error';
-      if (s !== 'error' && status !== 'error') status = 'ok';
-      const t = obj.lastSyncedAt || obj.lastSynced || null;
-      if (t) {
-        if (!last || new Date(t) > new Date(last)) last = t;
+  const filteredCourses = courses
+    .filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    .map(c => {
+      const meta = (c as any).platformMeta || {};
+      const entries = Object.values(meta) as any[];
+      let syncStatus = '—';
+      let lastSynced = '-';
+      if (entries.length > 0) {
+        if (entries.some(e => e.status === 'error')) syncStatus = 'error';
+        else if (entries.some(e => e.status === 'ok')) syncStatus = 'ok';
+        else syncStatus = 'unknown';
+        const times = entries.map(e => e.lastSyncedAt || e.lastSynced || null).filter(Boolean) as string[];
+        if (times.length > 0) lastSynced = new Date(Math.max(...times.map(t => new Date(t).getTime()))).toLocaleString();
       }
-      const color = s === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50';
-      badges.push(<span key={plat} className={`px-2 py-0.5 rounded-full text-xs ${color} border ${s === 'error' ? 'border-red-100' : 'border-green-100'} mr-2`}>{plat}</span>);
+      return { ...c, syncStatus, lastSynced };
     });
-
-    const jsx = <div className="flex items-center">{badges}</div>;
-    return { status, lastSynced: last, jsx };
-  };
-
-  const gridData = filteredCourses.map(c => {
-    const summary = formatPlatformSummary((c as any).platformMeta);
-    const lastSynced = summary.lastSynced ? new Date(summary.lastSynced).toLocaleString() : '';
-    const statusLabel = summary.status === 'ok' ? (<div className="flex items-center gap-2"><CheckCircle className="text-green-600" size={14}/> <span className="text-xs text-slate-700">OK</span> </div>) : summary.status === 'error' ? (<div className="flex items-center gap-2"><AlertTriangle className="text-red-600" size={14}/> <span className="text-xs text-red-600">Error</span></div>) : (<span className="text-xs text-slate-400">N/A</span>);
-
-    const syncAction = (
-      <div className="flex items-center gap-2">
-        <button onClick={async () => {
-          setResyncing(prev => ({ ...prev, [c.id]: true }));
-          try {
-            const results = await syncCourse('update', c);
-            if (results && results.length) {
-              const platformMeta: Record<string, any> = {};
-              results.forEach(r => { platformMeta[r.platform] = r; });
-              await setCoursePlatformMeta(c.id, platformMeta);
-              alert('Resync completed.');
-            } else {
-              alert('Resync completed: no results from platform (or feature not configured).');
-            }
-          } catch (e:any) {
-            console.error('Resync failed:', e);
-            alert('Resync failed: ' + (e.message || e));
-          } finally {
-            setResyncing(prev => ({ ...prev, [c.id]: false }));
-          }
-        }} className="px-2 py-1 text-xs border rounded hover:bg-slate-50 flex items-center gap-2">
-          {resyncing[c.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span>
-        </button>
-      </div>
-    );
-
-    return { ...c, syncStatus: statusLabel, lastSynced, syncAction, platformMeta: (c as any).platformMeta };
-  });
 
   return (
     <>
@@ -247,7 +253,7 @@ const CourseManager: React.FC = () => {
 
       <div className="flex-1 overflow-auto rounded-lg border-slate-200">
         {viewMode === 'grid' ? (
-           <DataGrid data={gridData} columns={gridColumns} onUpdate={handleGridUpdate} onAddRow={handleAddRow} onDeleteRows={handleDeleteRows} />
+           <DataGrid data={filteredCourses} columns={gridColumns} onUpdate={handleGridUpdate} onAddRow={handleAddRow} onDeleteRows={handleDeleteRows} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
              {filteredCourses.map(c => (
@@ -259,6 +265,7 @@ const CourseManager: React.FC = () => {
                   </div>
                   <div className="flex gap-1 ml-2">
                     <button onClick={() => handleOpenModal(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>
+                    <button onClick={() => openCourseAttEditor(c)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="Edit Attendees"><Users size={16} /></button>
                     <button onClick={() => handleDelete(c.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
                   </div>
                 </div>
@@ -283,51 +290,17 @@ const CourseManager: React.FC = () => {
                     <span className="bg-green-50 text-green-700 px-2 py-0.5 rounded-full">{c.assistantIds.length} TAs</span>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      {(() => {
-                        const pm = (c as any).platformMeta;
-                        if (!pm) return <span className="text-xs text-slate-400">Sync: N/A</span>;
-                        const keys = Object.keys(pm);
-                        if (keys.length === 0) return <span className="text-xs text-slate-400">Sync: N/A</span>;
-                        return keys.map(k => {
-                          const entry = pm[k];
-                          const s = entry?.status || (entry.courseId ? 'ok' : 'error');
-                          return <span key={k} className={`px-2 py-0.5 rounded-full text-xs ${s === 'error' ? 'text-red-600 bg-red-50' : 'text-green-700 bg-green-50'} border ${s === 'error' ? 'border-red-100' : 'border-green-100'}`}>{k}</span>;
-                        })
-                      })()}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <div className="text-slate-400 text-xs">{(() => {
-                        const pm = (c as any).platformMeta;
-                        if (!pm) return '—';
-                        const last = Object.values(pm).map((x:any) => x.lastSyncedAt || x.lastSynced).filter(Boolean).sort().reverse()[0];
-                        return last ? new Date(last).toLocaleString() : '—';
-                      })()}</div>
-
-                      <button onClick={async () => {
-                        setResyncing(prev => ({ ...prev, [c.id]: true }));
-                        try {
-                          const results = await syncCourse('update', c);
-                          if (results && results.length) {
-                            const platformMeta: Record<string, any> = {};
-                            results.forEach(r => { platformMeta[r.platform] = r; });
-                            await setCoursePlatformMeta(c.id, platformMeta);
-                            alert('Resync completed.');
-                          } else {
-                            alert('Resync completed: no results from platform (or feature not configured).');
-                          }
-                        } catch (e:any) {
-                          console.error('Resync failed:', e);
-                          alert('Resync failed: ' + (e.message || e));
-                        } finally {
-                          setResyncing(prev => ({ ...prev, [c.id]: false }));
-                        }
-                      }} className="px-2 py-1 border rounded text-xs hover:bg-slate-50 flex items-center gap-2">
-                        {resyncing[c.id] ? <RotateCw size={14} className="animate-spin"/> : <RotateCw size={14}/>}<span>Resync</span>
-                      </button>
-                    </div>
+                  <div className="flex gap-2 items-center mt-3">
+                    {c.platformMeta && Object.keys(c.platformMeta).length > 0 ? (
+                      Object.entries(c.platformMeta).map(([k, v]: any) => (
+                        <div key={k} className={`text-xs px-2 py-1 rounded border ${v.status === 'ok' ? 'bg-green-50 text-green-700 border-green-100' : v.status === 'error' ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                          <div className="font-medium">{k}</div>
+                          <div className="text-[11px]">{v.status || '-'}{v.lastSyncedAt ? ` • ${new Date(v.lastSyncedAt).toLocaleString()}` : ''}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-xs text-slate-400">未同步</div>
+                    )}
                   </div>
 
                   {c.startDate && <div className="text-xs text-slate-400 mt-2 text-right">{c.startDate} to {c.endDate}</div>}
@@ -337,6 +310,32 @@ const CourseManager: React.FC = () => {
           </div>
         )}
       </div>
+
+      {isCourseAttModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+            <div className="p-4 border-b flex justify-between sticky top-0 bg-white z-10"><h3 className="text-lg font-bold">Edit Course Attendees</h3><button onClick={() => { setIsCourseAttModalOpen(false); setCurrentCourseForAtt(null); }}><X size={20} /></button></div>
+            <div className="p-4 grid grid-cols-1 gap-4">
+              <div>
+                <div className="text-sm text-slate-500 mb-2">Paste attendee phone numbers (comma / space / newline separated)</div>
+                <textarea className="w-full p-2 border rounded h-36" value={courseAttPhonesText} onChange={e => setCourseAttPhonesText(e.target.value)} />
+              </div>
+
+              <div className="flex gap-2 items-center">
+                <input type="file" ref={courseAttFileRef} hidden accept=".csv,.txt" onChange={e => e.target.files?.[0] && handleCourseAttImport(e.target.files[0])} />
+                <button onClick={() => courseAttFileRef.current?.click()} className="px-3 py-2 border rounded">Import CSV</button>
+                <button onClick={() => exportCourseAttendees(currentCourseForAtt || undefined)} className="px-3 py-2 border rounded">Export Current</button>
+                <div className="flex-1 text-xs text-slate-500">Will update all sessions' attendee list to the provided phones (mapping by student phone).</div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2 border-t">
+                <button onClick={() => { setIsCourseAttModalOpen(false); setCurrentCourseForAtt(null); }} className="px-4 py-2 border rounded">Cancel</button>
+                <button onClick={() => currentCourseForAtt && applyAttendeesToCourse(currentCourseForAtt, courseAttPhonesText)} className="px-4 py-2 bg-indigo-600 text-white rounded">Apply to All Sessions</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">

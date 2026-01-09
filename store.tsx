@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
-import { AppState, Course, Person, Session, ScheduleParams, UserRecord, Role } from './types';
+import { AppState, Course, Person, Session, ScheduleParams, UserRecord, Role, Student, Client, School } from './types';
 
 // --- 1. 定义数据库白名单 (DB Schema Definition) ---
 // 只有在这里列出的字段才会被发送到 Supabase。
@@ -18,16 +18,28 @@ const DB_SCHEMA = {
     'id', 'name', 'type', 'difficulty', 'module', 'semester', 
     'location', 'startDate', 'endDate', 
     'defaultStartTime', 'defaultEndTime', 
-    'teacherIds', 'assistantIds', 'notes'
+    'teacherIds', 'assistantIds', 'attendingStudentIds', 'notes'
     // 注意：sessionCount 和 totalHours 是前端计算属性，不存数据库，所以不写在这里
   ],
   sessions: [
     'id', 'courseId', 'sequence', 'topic', 
-    'teacherIds', 'assistantIds', 
+    'teacherIds', 'assistantIds', 'attendingStudentIds',
     'date', 'startTime', 'endTime', 'durationHours', 
     'notes'
-  ]
-  ,
+  ],
+
+  students: [
+    'id','name','gender','dob','juniorPrimary','juniorHigh','seniorHigh','primaryCoachIds','undergraduate','undergraduatePlan','researchDirection','graduateUnit','employment','awards','highestAward','learningGoals','meetingPhone','participatingTraining','totalPayments','rewards','phone','motherName','motherPhone','fatherName','fatherPhone','address','mailingAddress','notes'
+  ],
+
+  clients: [
+    'id','name','gender','dob','phone','demandRecords','contactHistory','unit','schoolId','position','pastUnits','currentTeachingSchool','currentTeachingPosition','cohorts','studentIds','projects','revenueTotal','rebateTotal','remitMethod','seniorHigh','undergraduate','admissionPlan','masterUnit','phdUnit','postdocUnit','researchDirection','familyInfo','hobbies','address','mailingAddress','socialMedia','notes'
+  ],
+
+  schools: [
+    'id','country','province','city','fullName','shortName','type','contactPerson','contactPhone','demandRecords','contactHistory','projects','revenueTotal','rebateTotal','teacherIds','studentIds','formerLeaders','seniorHighAdmission','olympiadAwards','universityRatings','officialHomepage','notes'
+  ],
+
   // 用户表：用于权限管理（与 Auth 整合）
   users: ['id', 'email', 'name', 'phone', 'role']
 };
@@ -56,7 +68,17 @@ interface AppContextType extends AppState {
   addSession: (s: Session) => void;
   updateSession: (s: Session) => void;
   deleteSession: (id: string) => void;
-  importData: (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => void;
+  // 新增实体 CRUD
+  addStudent: (s: any) => void;
+  updateStudent: (s: any) => void;
+  deleteStudent: (id: string) => void;
+  addClient: (c: any) => void;
+  updateClient: (c: any) => void;
+  deleteClient: (id: string) => void;
+  addSchool: (s: any) => void;
+  updateSchool: (s: any) => void;
+  deleteSchool: (id: string) => void;
+  importData: (type: 'teachers' | 'assistants' | 'courses' | 'sessions' | 'students' | 'clients' | 'schools', data: any[], mode: 'append' | 'replace') => void;
   updateScheduleParams: (params: Partial<ScheduleParams>) => void;
   isLoading: boolean;
   profileLoading: boolean;
@@ -65,10 +87,6 @@ interface AppContextType extends AppState {
   isEditor: boolean;
   updateUserRole: (userId: string, role: Role) => Promise<void>;
   inviteUser: (email: string, name: string, role?: Role, phone?: string) => Promise<boolean>;
-  updateUser: (u: Partial<UserRecord> & { id: string }) => Promise<void>;
-  // 新增：用于手动保存平台同步元信息
-  setCoursePlatformMeta: (courseId: string, platformMeta: Record<string, any>) => void;
-  setSessionPlatformMeta: (sessionId: string, platformMeta: Record<string, any>) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -78,6 +96,9 @@ const initialState: AppState = {
   assistants: [],
   courses: [],
   sessions: [],
+  students: [],
+  clients: [],
+  schools: [],
   scheduleParams: {
     startMonth: new Date().toISOString().slice(0, 7),
     endMonth: '',
@@ -102,11 +123,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const usersRes = await supabase.from('users').select('*');
         const coursesRes = await supabase.from('courses').select('*');
         const sessionsRes = await supabase.from('sessions').select('*');
+        const studentsRes = await supabase.from('students').select('*');
+        const clientsRes = await supabase.from('clients').select('*');
+        const schoolsRes = await supabase.from('schools').select('*');
 
         const people = (peopleRes.data as Person[]) || [];
         const usersList = (usersRes.data as UserRecord[]) || [];
         const coursesRaw = (coursesRes.data as Course[]) || [];
         const sessions = (sessionsRes.data as Session[]) || [];
+        const students = (studentsRes.data as any[]) || [];
+        const clients = (clientsRes.data as any[]) || [];
+        const schools = (schoolsRes.data as any[]) || [];
 
         // 前端计算统计数据
         const courses = coursesRaw.map(c => {
@@ -127,7 +154,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           teachers: people.filter(p => p.type === 'Teacher'),
           assistants: people.filter(p => p.type === 'TA'),
           courses: courses,
-          sessions: sessions
+          sessions: sessions,
+          students: students,
+          clients: clients,
+          schools: schools
         }));
 
         setUsers(usersList);
@@ -211,6 +241,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  // --- 辅助函数：同步某门课程的参课学生 ---
+  const syncCourseAttendees = async (courseId: string, sessionsSnapshot?: Session[]) => {
+    // Compute union of attendingStudentIds from all sessions for this course
+    const allSessions = sessionsSnapshot || (state.sessions || []);
+    const courseSessions = allSessions.filter(s => s.courseId === courseId);
+    const union = Array.from(new Set(courseSessions.flatMap(s => Array.isArray((s as any).attendingStudentIds) ? (s as any).attendingStudentIds : [])));
+
+    // Update local state optimistically
+    setState(prev => ({ ...prev, courses: prev.courses.map(c => c.id === courseId ? { ...c, attendingStudentIds: union } : c) }));
+
+    // Update course in DB
+    try {
+      const payload: any = { attendingStudentIds: union };
+      const { error } = await supabase.from('courses').update(payload).eq('id', courseId);
+      if (error) console.error('Update course attendingStudentIds failed:', error);
+    } catch (e) {
+      console.error('DB error updating course attendees:', e);
+    }
+
+    // Update students' participatingTraining field: add courseId to students in union, remove from students not in union
+    try {
+      const studentsList = state.students || [];
+      // IDs currently containing the course
+      const hadCourse = studentsList.filter(s => Array.isArray((s as any).participatingTraining) && (s as any).participatingTraining.includes(courseId)).map(s => s.id);
+
+      const toAdd = union.filter(id => !hadCourse.includes(id));
+      const toRemove = hadCourse.filter(id => !union.includes(id));
+
+      // Add courseId to students in 'toAdd'
+      for (const sid of toAdd) {
+        const stud = studentsList.find(s => s.id === sid);
+        if (!stud) continue;
+        const newTraining = Array.isArray((stud as any).participatingTraining) ? [...(stud as any).participatingTraining, courseId] : [courseId];
+        // Update local state
+        setState(prev => ({ ...prev, students: prev.students?.map(s => s.id === sid ? { ...s, participatingTraining: newTraining } : s) }));
+        // Update DB
+        const { error } = await supabase.from('students').update({ participatingTraining: newTraining }).eq('id', sid);
+        if (error) console.error('Failed to add participatingTraining for student', sid, error);
+      }
+
+      // Remove courseId from students in 'toRemove'
+      for (const sid of toRemove) {
+        const stud = studentsList.find(s => s.id === sid);
+        if (!stud) continue;
+        const newTraining = (stud as any).participatingTraining ? (stud as any).participatingTraining.filter((x: string) => x !== courseId) : [];
+        setState(prev => ({ ...prev, students: prev.students?.map(s => s.id === sid ? { ...s, participatingTraining: newTraining } : s) }));
+        const { error } = await supabase.from('students').update({ participatingTraining: newTraining }).eq('id', sid);
+        if (error) console.error('Failed to remove participatingTraining for student', sid, error);
+      }
+    } catch (e) {
+      console.error('Error syncing student participatingTraining:', e);
+    }
+  };
+
   // --- 人员管理 (Person) ---
   const addPerson = async (p: Person) => {
     // Optimistic Update
@@ -247,6 +331,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (error) console.error("Delete Person Error:", error);
   };
 
+  // --- 学生管理 ---
+  const addStudent = async (s: any) => {
+    setState(prev => ({ ...prev, students: [...(prev.students || []), s] }));
+    const payload = sanitize(s, 'students');
+    const { error } = await supabase.from('students').insert([payload]);
+    if (error) console.error('Add Student Error:', error);
+  };
+
+  const updateStudent = async (s: any) => {
+    setState(prev => ({ ...prev, students: (prev.students || []).map(x => x.id === s.id ? s : x) }));
+    const payload = sanitize(s, 'students');
+    delete payload.id;
+    const { error } = await supabase.from('students').update(payload).eq('id', s.id);
+    if (error) console.error('Update Student Error:', error);
+  };
+
+  const deleteStudent = async (id: string) => {
+    // Remove student id from any session / course attending lists
+    setState(prev => ({
+      ...prev,
+      students: (prev.students || []).filter(x => x.id !== id),
+      sessions: prev.sessions.map(s => ({ ...s, attendingStudentIds: Array.isArray((s as any).attendingStudentIds) ? (s as any).attendingStudentIds.filter((sid: string) => sid !== id) : [] })),
+      courses: prev.courses.map(c => ({ ...c, attendingStudentIds: Array.isArray((c as any).attendingStudentIds) ? (c as any).attendingStudentIds.filter((sid: string) => sid !== id) : [] }))
+    }));
+
+    // DB update: delete student row
+    const { error } = await supabase.from('students').delete().eq('id', id);
+    if (error) console.error('Delete Student Error:', error);
+  };
+
+  // --- 客户管理 ---
+  const addClient = async (c: any) => {
+    setState(prev => ({ ...prev, clients: [...(prev.clients || []), c] }));
+    const payload = sanitize(c, 'clients');
+    const { error } = await supabase.from('clients').insert([payload]);
+    if (error) console.error('Add Client Error:', error);
+  };
+
+  const updateClient = async (c: any) => {
+    setState(prev => ({ ...prev, clients: (prev.clients || []).map(x => x.id === c.id ? c : x) }));
+    const payload = sanitize(c, 'clients');
+    delete payload.id;
+    const { error } = await supabase.from('clients').update(payload).eq('id', c.id);
+    if (error) console.error('Update Client Error:', error);
+  };
+
+  const deleteClient = async (id: string) => {
+    setState(prev => ({ ...prev, clients: (prev.clients || []).filter(x => x.id !== id) }));
+    const { error } = await supabase.from('clients').delete().eq('id', id);
+    if (error) console.error('Delete Client Error:', error);
+  };
+
+  // --- 学校管理 ---
+  const addSchool = async (s: any) => {
+    setState(prev => ({ ...prev, schools: [...(prev.schools || []), s] }));
+    const payload = sanitize(s, 'schools');
+    const { error } = await supabase.from('schools').insert([payload]);
+    if (error) console.error('Add School Error:', error);
+  };
+
+  const updateSchool = async (s: any) => {
+    setState(prev => ({ ...prev, schools: (prev.schools || []).map(x => x.id === s.id ? s : x) }));
+    const payload = sanitize(s, 'schools');
+    delete payload.id;
+    const { error } = await supabase.from('schools').update(payload).eq('id', s.id);
+    if (error) console.error('Update School Error:', error);
+  };
+
+  const deleteSchool = async (id: string) => {
+    setState(prev => ({ ...prev, schools: (prev.schools || []).filter(x => x.id !== id) }));
+    const { error } = await supabase.from('schools').delete().eq('id', id);
+    if (error) console.error('Delete School Error:', error);
+  };
+
   // --- 课程管理 (Course) ---
   const addCourse = async (c: Course) => {
     // Optimistic local add
@@ -268,8 +426,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const results = await import('./services/platformSync').then(m => m.syncCourse('create', created));
       if (results && results.length) {
+        const now = new Date().toISOString();
         const platformMeta: Record<string, any> = {};
-        results.forEach(r => { platformMeta[r.platform] = r; });
+        results.forEach(r => { platformMeta[r.platform] = { ...r, lastSyncedAt: now }; });
         const { error: e2 } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', created.id);
         if (e2) console.error('Save platform_meta failed:', e2);
         else setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === created.id ? { ...x, platformMeta } : x) }));
@@ -296,8 +455,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const results = await import('./services/platformSync').then(m => m.syncCourse('update', updated));
       if (results && results.length) {
+        const now = new Date().toISOString();
         const platformMeta: Record<string, any> = {};
-        results.forEach(r => { platformMeta[r.platform] = r; });
+        results.forEach(r => { platformMeta[r.platform] = { ...r, lastSyncedAt: now }; });
         const { error: e2 } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', updated.id);
         if (e2) console.error('Save platform_meta failed:', e2);
         else setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === updated.id ? { ...x, platformMeta } : x) }));
@@ -341,8 +501,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const results = await import('./services/platformSync').then(m => m.syncSession('create', created));
       if (results && results.length) {
+        const now = new Date().toISOString();
         const platformMeta: Record<string, any> = {};
-        results.forEach(r => { platformMeta[r.platform] = r; });
+        results.forEach(r => { platformMeta[r.platform] = { ...r, lastSyncedAt: now }; });
         const { error: e2 } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', created.id);
         if (e2) console.error('Save platform_meta failed:', e2);
         else setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === created.id ? { ...x, platformMeta } : x) }));
@@ -350,11 +511,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error('Platform sync (create session) error:', e);
     }
+
+    // 同步参课学生到课程与学生的参与字段
+    await syncCourseAttendees(created.courseId);
+
   };
 
   const updateSession = async (s: Session) => {
+    // Capture previous session before state update so we can sync old course if needed
+    const oldSession = state.sessions.find(x => x.id === s.id);
+
     setState(prev => {
-      const oldSession = prev.sessions.find(x => x.id === s.id);
       const newSessions = prev.sessions.map(x => x.id === s.id ? s : x);
       let updatedCourses = recalculateCourseStats(prev.courses, newSessions, s.courseId);
       if (oldSession && oldSession.courseId !== s.courseId) {
@@ -377,8 +544,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const results = await import('./services/platformSync').then(m => m.syncSession('update', updated));
       if (results && results.length) {
+        const now = new Date().toISOString();
         const platformMeta: Record<string, any> = {};
-        results.forEach(r => { platformMeta[r.platform] = r; });
+        results.forEach(r => { platformMeta[r.platform] = { ...r, lastSyncedAt: now }; });
         const { error: e2 } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', updated.id);
         if (e2) console.error('Save platform_meta failed:', e2);
         else setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === updated.id ? { ...x, platformMeta } : x) }));
@@ -386,11 +554,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e) {
       console.error('Platform sync (update session) error:', e);
     }
+
+    // 同步参课学生到课程与学生的参与字段
+    await syncCourseAttendees(updated.courseId || '');
+    // 如果课程发生变更，也同步旧课程的参课学生
+    if (oldSession && oldSession.courseId && oldSession.courseId !== updated.courseId) {
+      await syncCourseAttendees(oldSession.courseId);
+    }
   };
 
   const deleteSession = async (id: string) => {
+    // Find the session to delete before mutating state
+    const sessionToDelete = state.sessions.find(s => s.id === id);
+
     setState(prev => {
-      const sessionToDelete = prev.sessions.find(s => s.id === id);
       const newSessions = prev.sessions.filter(x => x.id !== id);
       let updatedCourses = prev.courses;
       if (sessionToDelete) {
@@ -400,6 +577,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     const { error } = await supabase.from('sessions').delete().eq('id', id);
     if (error) console.error("Delete Session Error:", error);
+
+    // 同步参课学生
+    if (sessionToDelete && sessionToDelete.courseId) await syncCourseAttendees(sessionToDelete.courseId);
   };
 
   const updateScheduleParams = (params: Partial<ScheduleParams>) => {
@@ -409,37 +589,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
   }
 
-  // Persist platform_meta for a course (used by manual resync UI)
-  const setCoursePlatformMeta = async (courseId: string, platformMeta: Record<string, any>) => {
-    try {
-      const { error } = await supabase.from('courses').update({ platform_meta: platformMeta }).eq('id', courseId);
-      if (error) {
-        console.error('setCoursePlatformMeta error:', error);
-        return;
-      }
-      setState(prev => ({ ...prev, courses: prev.courses.map(c => c.id === courseId ? { ...c, platformMeta } : c) }));
-    } catch (e) {
-      console.error('setCoursePlatformMeta exception:', e);
-    }
-  };
-
-  // Persist platform_meta for a session (used by manual resync UI)
-  const setSessionPlatformMeta = async (sessionId: string, platformMeta: Record<string, any>) => {
-    try {
-      const { error } = await supabase.from('sessions').update({ platform_meta: platformMeta }).eq('id', sessionId);
-      if (error) {
-        console.error('setSessionPlatformMeta error:', error);
-        return;
-      }
-      setState(prev => ({ ...prev, sessions: prev.sessions.map(s => s.id === sessionId ? { ...s, platformMeta } : s) }));
-    } catch (e) {
-      console.error('setSessionPlatformMeta exception:', e);
-    }
-  };
-
-
   // --- 数据导入 (Batch) ---
-  const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => {
+  const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions' | 'students' | 'clients' | 'schools', data: any[], mode: 'append' | 'replace') => {
     // 1. 标准化数据结构
     const processedData = data.map(item => {
         const newItem: any = {
@@ -481,6 +632,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (type === 'courses') {
         tableName = 'courses';
         schemaType = 'courses';
+    } else if (type === 'sessions') {
+        tableName = 'sessions';
+        schemaType = 'sessions';
+    } else if (type === 'students') {
+        tableName = 'students';
+        schemaType = 'students';
+    } else if (type === 'clients') {
+        tableName = 'clients';
+        schemaType = 'clients';
+    } else if (type === 'schools') {
+        tableName = 'schools';
+        schemaType = 'schools';
     } else {
         tableName = 'sessions';
         schemaType = 'sessions';
@@ -509,6 +672,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
              const newItems = processedData as Session[];
              if (mode === 'replace') newState.sessions = newItems;
              else newState.sessions = [...prev.sessions, ...newItems];
+        } else if (type === 'students') {
+             const newItems = processedData as any[];
+             if (mode === 'replace') newState.students = newItems;
+             else newState.students = [...(prev.students || []), ...newItems];
+        } else if (type === 'clients') {
+             const newItems = processedData as any[];
+             if (mode === 'replace') newState.clients = newItems;
+             else newState.clients = [...(prev.clients || []), ...newItems];
+        } else if (type === 'schools') {
+             const newItems = processedData as any[];
+             if (mode === 'replace') newState.schools = newItems;
+             else newState.schools = [...(prev.schools || []), ...newItems];
         }
         
         // 如果是导入 Sessions，重新计算 Course 统计
@@ -522,6 +697,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         return newState;
     });
+
+    // 如果是导入 Sessions，需要同步课程的参课学生信息
+    if (type === 'sessions') {
+        const affectedCourseIds = Array.from(new Set(processedData.map(p => p.courseId).filter(Boolean)));
+        for (const cid of affectedCourseIds) {
+            // call without waiting to avoid blocking large imports
+            syncCourseAttendees(cid);
+        }
+    }
 
     // 4. 同步到云端
     try {
@@ -576,32 +760,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.error('updateUserRole error:', err);
     }
   };
-
-  // 通用更新用户（用于修改 phone / name / role）
-  const updateUser = async (u: Partial<UserRecord> & { id: string }) => {
-    if (!currentUser || currentUser.role !== 'owner') {
-      console.warn('updateUser requires owner privileges');
-      return;
-    }
-
-    try {
-      const payload = sanitize(u, 'users');
-      delete (payload as any).id;
-      const { error } = await supabase.from('users').update(payload).eq('id', u.id);
-      if (error) {
-        console.error('updateUser error:', error);
-        throw error;
-      }
-      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, ...u } as UserRecord : x));
-      if (currentUser && currentUser.id === u.id) {
-        setCurrentUser(prev => prev ? { ...prev, ...u } as UserRecord : prev);
-      }
-    } catch (err) {
-      console.error('updateUser exception', err);
-      throw err;
-    }
-  };
-
   // Invite / create a user (owner-only)
   const inviteUser = async (email: string, name: string, role: Role = 'visitor', phone?: string) => {
     if (!currentUser || currentUser.role !== 'owner') {
@@ -629,12 +787,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addPerson, updatePerson, deletePerson,
       addCourse, updateCourse, deleteCourse,
       addSession, updateSession, deleteSession,
+      addStudent, updateStudent, deleteStudent,
+      addClient, updateClient, deleteClient,
+      addSchool, updateSchool, deleteSchool,
       importData, updateScheduleParams,
       isLoading,
       profileLoading,
-      setCoursePlatformMeta, setSessionPlatformMeta,
-      inviteUser,
-      updateUser
+      inviteUser
     }}>
       {children}
     </AppContext.Provider>
