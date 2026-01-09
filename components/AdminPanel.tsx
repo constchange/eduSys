@@ -13,7 +13,7 @@ const roleBadge = (r: Role) => {
 };
 
 const AdminPanel: React.FC = () => {
-  const { users, currentUser, updateUserRole, inviteUser } = useAppStore();
+  const { users, currentUser, updateUserRole, inviteUser, refreshUsers } = useAppStore();
   const [q, setQ] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
@@ -40,11 +40,12 @@ const AdminPanel: React.FC = () => {
   }
 
   const handleChange = async (id: string, role: Role) => {
-    // Prevent downgrading the active owner accidentally
-    if (id === currentUser.id && role !== 'owner') {
-      alert('不能更改自己的负责人角色。如需降级，请先委任其他负责人。');
+    // Prevent changing own role (owner can change any other user)
+    if (id === currentUser.id) {
+      alert('不能更改自己的角色。如需修改，请让其他负责人操作。');
       return;
     }
+
     await updateUserRole(id, role);
   };
 
@@ -72,6 +73,7 @@ const AdminPanel: React.FC = () => {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name or email…" className="pl-10 pr-3 py-2 border border-slate-200 rounded-lg w-80" />
           </div>
+          <button onClick={refreshUsers} className="btn-secondary flex items-center gap-2 px-3 py-2 border rounded hover:bg-slate-50" title="Refresh user list"><Download size={16}/> 刷新</button>
           <button className="btn-secondary flex items-center gap-2 px-3 py-2 border rounded hover:bg-slate-50"><Download size={16}/> 导出</button>
         </div>
       </div>
@@ -147,7 +149,7 @@ const AdminPanel: React.FC = () => {
                 </td>
                 <td className="py-3 pr-4">
                   <div className="flex items-center gap-2">
-                    {u.id === currentUser.id ? <div className="text-xs text-slate-400">Current Owner</div> : <button onClick={() => handleChange(u.id, 'viewer')} className="px-3 py-1 border rounded text-xs hover:bg-slate-50">Set as Viewer</button>}
+                    {u.id === currentUser.id ? <div className="text-xs text-slate-400">Current User (You)</div> : <button onClick={() => handleChange(u.id, 'viewer')} className="px-3 py-1 border rounded text-xs hover:bg-slate-50">Set as Viewer</button>}
                   </div>
                 </td>
               </tr>

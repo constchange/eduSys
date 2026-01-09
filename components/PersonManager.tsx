@@ -13,14 +13,21 @@ interface Props {
 const PersonManager: React.FC<Props> = ({ type }) => {
   const { teachers, assistants, addPerson, updatePerson, deletePerson, importData, currentUser } = useAppStore();
   const rawList = type === 'Teacher' ? teachers : assistants;
-  const isViewer = !!(currentUser && currentUser.role === 'viewer');
-  const list = isViewer ? rawList.filter(p => p.name === currentUser?.name) : rawList;
+  const isViewerRole = !!(currentUser && currentUser.role === 'viewer');
+  const list = isViewerRole ? rawList.filter(p => p.name === currentUser?.name) : rawList;
+  const canAddOrImport = !!(currentUser && currentUser.role !== 'viewer');
+  const canEditPerson = (p: Person) => {
+    if (!currentUser) return false;
+    if (currentUser.role === 'owner' || currentUser.role === 'editor') return true;
+    if (currentUser.role === 'viewer') return p.name === currentUser.name;
+    return false;
+  };
   const [viewMode, setViewMode] = useState<'card' | 'grid'>('card'); 
 
   // If viewer, force card view (readonly)
   React.useEffect(() => {
-    if (isViewer && viewMode === 'grid') setViewMode('card');
-  }, [isViewer, viewMode]);
+    if (isViewerRole && viewMode === 'grid') setViewMode('card');
+  }, [isViewerRole, viewMode]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -58,7 +65,14 @@ const PersonManager: React.FC<Props> = ({ type }) => {
   };
 
   const savePerson = () => {
-     editingId ? updatePerson(formData) : addPerson(formData);
+    // If viewer editing own record, prevent name change
+    if (currentUser?.role === 'viewer' && editingId && editingId === formData.id && formData.name !== currentUser.name) {
+      alert('Viewer cannot change name');
+      setFormData(prev => ({ ...prev, name: currentUser.name }));
+      return;
+    }
+
+    editingId ? updatePerson(formData) : addPerson(formData);
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -89,7 +103,22 @@ const PersonManager: React.FC<Props> = ({ type }) => {
 
   const handleGridUpdate = (id: string, field: string, value: any) => {
     const person = list.find(p => p.id === id);
-    if (person) updatePerson({ ...person, [field]: value });
+    if (!person) return;
+
+    // Viewers can only edit their own record and cannot change name
+    if (currentUser?.role === 'viewer') {
+      if (person.name !== currentUser.name) {
+        console.warn('Viewer cannot edit other records');
+        return;
+      }
+      if (field === 'name') {
+        console.warn('Viewer cannot change name');
+        return;
+      }
+    }
+
+    // Editors / Owners may perform updates
+    updatePerson({ ...person, [field]: value });
   };
 
   const handleAddRow = () => {
@@ -97,6 +126,10 @@ const PersonManager: React.FC<Props> = ({ type }) => {
   };
 
   const handleDeleteRows = (ids: string[]) => {
+    if (currentUser?.role === 'viewer') {
+      console.warn('Viewer cannot delete records');
+      return;
+    }
     ids.forEach(id => deletePerson(id));
   };
 
@@ -160,10 +193,10 @@ const PersonManager: React.FC<Props> = ({ type }) => {
         <div className="flex gap-2">
            <div className="flex bg-slate-100 p-1 rounded-lg mr-2">
              <button onClick={() => setViewMode('card')} className={`p-2 rounded ${viewMode === 'card' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><LayoutGrid size={18}/></button>
-             { !isViewer && <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button> }
+             { !isViewerRole && <button onClick={() => setViewMode('grid')} className={`p-2 rounded ${viewMode === 'grid' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}><Table size={18}/></button> }
            </div>
           
-          { !isViewer && (
+          { canAddOrImport && (
             <>
               <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
               <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
@@ -186,12 +219,10 @@ const PersonManager: React.FC<Props> = ({ type }) => {
                     <h3 className="font-bold text-lg text-slate-800">{p.name}</h3>
                     <div className="text-xs text-slate-500">{p.gender} • {p.currentUnit}</div>
                   </div>
-                  {!isViewer && (
                   <div className="flex gap-1">
-                    <button onClick={() => handleOpenModal(p)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>
-                    <button onClick={() => handleDelete(p.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
+                    {canEditPerson(p) && <button onClick={() => handleOpenModal(p)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>}
+                    {(!currentUser || currentUser.role === 'viewer') ? null : <button onClick={() => handleDelete(p.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>}
                   </div>
-                  )}
                 </div>
                 <div className="space-y-1 text-sm text-slate-600">
                   <div className="flex justify-between"><span>Phone:</span> <span className="font-medium">{p.phone}</span></div>
@@ -209,7 +240,7 @@ const PersonManager: React.FC<Props> = ({ type }) => {
             <div className="p-6 border-b flex justify-between sticky top-0 bg-white z-10"><h3 className="text-xl font-bold">{editingId ? 'Edit' : 'Add'} Profile</h3><button onClick={() => setIsModalOpen(false)}><X size={24} /></button></div>
             <form onSubmit={handleSubmit} className="p-6 grid grid-cols-2 gap-4">
               <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider mt-2 border-b pb-1">Basic Information</div>
-              <input required className="p-2 border rounded" placeholder="Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+              <input required className="p-2 border rounded" placeholder="Name" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} disabled={currentUser?.role === 'viewer' && editingId !== null && editingId === formData.id} />
               <select className="p-2 border rounded" value={formData.gender} onChange={e => setFormData({...formData, gender: e.target.value as any})}><option value="Male">Male</option><option value="Female">Female</option></select>
               <div className="flex flex-col"><label className="text-xs text-slate-500">Date of Birth</label><input type="date" className="p-2 border rounded" value={formData.dob} onChange={e => setFormData({...formData, dob: e.target.value})} /></div>
               <input className="p-2 border rounded mt-auto" placeholder="Current Work/Study Unit" value={formData.currentUnit} onChange={e => setFormData({...formData, currentUnit: e.target.value})} />

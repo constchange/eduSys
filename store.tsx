@@ -86,6 +86,7 @@ interface AppContextType extends AppState {
   currentUser: UserRecord | null;
   isEditor: boolean;
   updateUserRole: (userId: string, role: Role) => Promise<void>;
+  refreshUsers: () => Promise<void>;
   inviteUser: (email: string, name: string, role?: Role, phone?: string) => Promise<boolean>;
 }
 
@@ -113,6 +114,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const isEditor = !!(currentUser && currentUser.role === 'editor');
+
+  // Function to manually refresh users list from DB
+  const refreshUsers = async () => {
+    try {
+      const { data, error } = await supabase.from('users').select('*');
+      if (error) throw error;
+      setUsers((data as UserRecord[]) || []);
+      console.log('[Store] Users list refreshed manually:', data?.length);
+    } catch (e) {
+      console.error('[Store] Failed to refresh users:', e);
+    }
+  };
 
   // --- 初始化加载数据 (READ) ---
   useEffect(() => {
@@ -225,6 +238,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Real-time updates: keep users list in sync when other admins or new registrations change the users table
+  useEffect(() => {
+    console.log('[Realtime] Setting up users table subscription...');
+    const channel = supabase.channel('public:users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, (payload: any) => {
+        try {
+          console.log('[Realtime] Users table change detected:', payload.eventType, payload);
+          // payload.eventType is 'INSERT'|'UPDATE'|'DELETE' and payload.new / payload.old contain rows
+          if (payload.eventType === 'INSERT') {
+            setUsers(prev => {
+              // Avoid duplicates
+              if (prev.some(u => u.id === payload.new.id)) {
+                console.log('[Realtime] Duplicate user insert ignored:', payload.new.id);
+                return prev;
+              }
+              console.log('[Realtime] Adding new user:', payload.new);
+              return [...prev, payload.new];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            console.log('[Realtime] Updating user:', payload.new.id);
+            setUsers(prev => prev.map(u => u.id === payload.new.id ? payload.new : u));
+            setCurrentUser(prev => prev && prev.id === payload.new.id ? payload.new : prev);
+          } else if (payload.eventType === 'DELETE') {
+            console.log('[Realtime] Deleting user:', payload.old.id);
+            setUsers(prev => prev.filter(u => u.id !== payload.old.id));
+            setCurrentUser(prev => prev && prev.id === payload.old.id ? null : prev);
+          }
+        } catch (e) {
+          console.error('Realtime users handler error:', e);
+        }
+      })
+      .subscribe((status: string) => {
+        console.log('[Realtime] Subscription status:', status);
+      });
+
+    return () => {
+      console.log('[Realtime] Cleaning up users subscription');
+      try { channel.unsubscribe(); } catch (e) { console.error('[Realtime] Unsubscribe error:', e); }
+    };
   }, []);
 
   // --- 辅助函数：更新本地 Course 统计 ---
@@ -749,15 +803,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    // Prevent owner from changing their own role (owner can change any other user including other owners)
+    if (userId === currentUser.id) {
+      console.warn('Owner cannot change their own role');
+      alert('不能更改自己的角色。如需降级，请先让其他负责人修改。');
+      return;
+    }
+
+    const targetUser = users.find(u => u.id === userId);
+    if (!targetUser) {
+      console.warn('Target user not found for updateUserRole');
+      return;
+    }
+
     try {
       const payload = sanitize({ role }, 'users');
-      const { error } = await supabase.from('users').update(payload).eq('id', userId);
+      // Return updated row to keep local cache consistent with DB
+      const { data, error } = await supabase.from('users').update(payload).eq('id', userId).select('*').maybeSingle();
       if (error) throw error;
-      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role } : u));
-      // 如果 we changed currentUser, update it too
-      setCurrentUser(prev => prev && prev.id === userId ? { ...prev, role } : prev);
+      const updatedUser = (data as any) || { ...targetUser, role };
+      setUsers(prev => prev.map(u => u.id === userId ? updatedUser : u));
+      // 如果 we changed currentUser (edge-case), update it too
+      setCurrentUser(prev => prev && prev.id === userId ? updatedUser : prev);
+      // Refresh users list to ensure consistency
+      await refreshUsers();
     } catch (err) {
       console.error('updateUserRole error:', err);
+      alert('修改用户权限失败: ' + (err as any).message);
     }
   };
   // Invite / create a user (owner-only)
@@ -769,8 +841,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const payload = sanitize({ email, name, role, phone }, 'users');
       const { error } = await supabase.from('users').insert([payload]);
       if (error) throw error;
-      const usersFetch = await supabase.from('users').select('*');
-      setUsers((usersFetch.data as UserRecord[]) || []);
+      // Refresh users list to ensure new user appears immediately
+      await refreshUsers();
       return true;
     } catch (err: any) {
       console.error('inviteUser error:', err);
@@ -784,6 +856,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentUser,
       isEditor,
       updateUserRole,
+      refreshUsers,
       addPerson, updatePerson, deletePerson,
       addCourse, updateCourse, deleteCourse,
       addSession, updateSession, deleteSession,

@@ -19,6 +19,13 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
   const [activeTab, setActiveTab] = useState<Tab>('teachers');
   const { isLoading, profileLoading, currentUser } = useAppStore();
 
+  // Set default tab based on role
+  React.useEffect(() => {
+    if (currentUser?.role === 'viewer') {
+      setActiveTab('schedule');
+    }
+  }, [currentUser]);
+
   if (profileLoading) {
     return (
       <div className="h-screen w-screen bg-slate-900 flex flex-col gap-4 items-center justify-center text-white">
@@ -29,16 +36,19 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
   }
 
   const navItems = [
-    { id: 'teachers', label: 'Teachers', icon: Users },
-    { id: 'assistants', label: 'Teaching Assistants', icon: GraduationCap },
-    { id: 'courses', label: 'Courses', icon: BookOpen },
-    { id: 'sessions', label: 'Sessions', icon: Clock },
-    { id: 'schedule', label: 'Schedule & Stats', icon: Calendar },
+    { id: 'teachers', label: 'Teachers', icon: Users, roles: ['owner', 'editor', 'viewer'] },
+    { id: 'assistants', label: 'Teaching Assistants', icon: GraduationCap, roles: ['owner', 'editor', 'viewer'] },
+    { id: 'courses', label: 'Courses', icon: BookOpen, roles: ['owner', 'editor'] },
+    { id: 'sessions', label: 'Sessions', icon: Clock, roles: ['owner', 'editor'] },
+    { id: 'schedule', label: 'Schedule & Stats', icon: Calendar, roles: ['owner', 'editor', 'viewer'] },
     // New pages
-    { id: 'students', label: 'Students', icon: Users },
-    { id: 'clients', label: 'Clients', icon: User },
-    { id: 'schools', label: 'Schools', icon: MapPin }
+    { id: 'students', label: 'Students', icon: Users, roles: ['owner', 'editor'] },
+    { id: 'clients', label: 'Clients', icon: User, roles: ['owner', 'editor'] },
+    { id: 'schools', label: 'Schools', icon: MapPin, roles: ['owner', 'editor'] }
   ];
+
+  // Filter nav items based on current user role
+  const visibleNavItems = currentUser ? navItems.filter(item => item.roles.includes(currentUser.role)) : [];
 
   // 如果是负责人，允许访问用户管理
   const showAdmin = currentUser && currentUser.role === 'owner';
@@ -65,7 +75,7 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
           </div>
           
           <nav className="flex-1 p-4 space-y-1">
-            {navItems.map(item => {
+            {visibleNavItems.map(item => {
               const Icon = item.icon;
               return (
                 <button
@@ -96,7 +106,7 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
               </button>
             )}
             {isEditor && (
-              <div className="p-3 text-xs text-slate-400">您是编辑人，除用户管理外拥有全部权限</div>
+              <div className="p-3 text-xs text-slate-400">您是编辑者，拥有教师、助教、课程、课节页面的编辑权限</div>
             )}
           </nav>
           
