@@ -19,17 +19,18 @@ DELETE FROM public.users
 WHERE auth_id NOT IN (SELECT id FROM auth.users)
    OR auth_id IS NULL;
 
--- 4. 为所有 Auth 用户创建或更新 users 记录
+-- 4. 为所有 Auth 用户创建或更新 users 记录（强制设为 visitor）
 INSERT INTO public.users (auth_id, email, name, role)
 SELECT 
     au.id,
     au.email,
     COALESCE(au.raw_user_meta_data->>'name', split_part(au.email, '@', 1)),
-    'visitor'
+    'visitor'  -- 强制设为 visitor，忽略 metadata 中可能存在的无效 role 值
 FROM auth.users au
 ON CONFLICT (email) DO UPDATE 
 SET auth_id = EXCLUDED.auth_id,
-    name = EXCLUDED.name;
+    name = EXCLUDED.name,
+    role = 'visitor';  -- 同时重置现有记录的 role
 
 -- 5. 手动设置你的账号为 owner（⚠️ 请替换为你的实际邮箱）
 UPDATE public.users 
