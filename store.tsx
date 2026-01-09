@@ -817,7 +817,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      console.log('[updateUserRole] Updating user', userId, 'to role:', role, 'Type:', typeof role);
       const payload = sanitize({ role }, 'users');
+      console.log('[updateUserRole] Sanitized payload:', payload);
       // Return updated row to keep local cache consistent with DB
       const { data, error } = await supabase.from('users').update(payload).eq('id', userId).select('*').maybeSingle();
       if (error) throw error;
