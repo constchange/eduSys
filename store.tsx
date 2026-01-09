@@ -817,12 +817,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
-      console.log('[updateUserRole] Updating user', userId, 'to role:', role, 'Type:', typeof role);
-      const payload = sanitize({ role }, 'users');
+      console.log('[updateUserRole] ===== START =====');
+      console.log('[updateUserRole] User ID:', userId);
+      console.log('[updateUserRole] New role:', role);
+      console.log('[updateUserRole] Role type:', typeof role);
+      console.log('[updateUserRole] Role value (JSON):', JSON.stringify(role));
+      
+      const inputPayload = { role };
+      console.log('[updateUserRole] Input payload:', inputPayload);
+      
+      const payload = sanitize(inputPayload, 'users');
       console.log('[updateUserRole] Sanitized payload:', payload);
+      console.log('[updateUserRole] Sanitized payload (JSON):', JSON.stringify(payload));
+      
       // Return updated row to keep local cache consistent with DB
+      console.log('[updateUserRole] Executing Supabase update...');
       const { data, error } = await supabase.from('users').update(payload).eq('id', userId).select('*').maybeSingle();
-      if (error) throw error;
+      
+      if (error) {
+        console.error('[updateUserRole] Supabase error:', error);
+        console.error('[updateUserRole] Error details:', JSON.stringify(error, null, 2));
+        throw error;
+      }
+      
+      console.log('[updateUserRole] Update successful, returned data:', data);
       const updatedUser = (data as any) || { ...targetUser, role };
       setUsers(prev => prev.map(u => u.id === userId ? updatedUser : u));
       // 如果 we changed currentUser (edge-case), update it too
