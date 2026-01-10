@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Person } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload } from 'lucide-react';
+import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, Eye } from 'lucide-react';
 import { exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
@@ -29,7 +29,9 @@ const PersonManager: React.FC<Props> = ({ type }) => {
     if (isViewerRole && viewMode === 'grid') setViewMode('card');
   }, [isViewerRole, viewMode]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [viewingPerson, setViewingPerson] = useState<Person | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,7 +49,7 @@ const PersonManager: React.FC<Props> = ({ type }) => {
     juniorHigh: '', seniorHigh: '', university: '', researchLab: '',
     workHistory: '', currentUnit: '',
     difficultyRange: '', preferences: '', 
-    phone: '', wechat: '', address: '', bankAccount: '', 
+    phone: '', email: '', wechat: '', address: '', bankAccount: '', 
     type: type
   };
 
@@ -62,6 +64,11 @@ const PersonManager: React.FC<Props> = ({ type }) => {
       setEditingId(null);
     }
     setIsModalOpen(true);
+  };
+
+  const handleOpenDetailModal = (person: Person) => {
+    setViewingPerson(person);
+    setIsDetailModalOpen(true);
   };
 
   const savePerson = () => {
@@ -170,6 +177,7 @@ const PersonManager: React.FC<Props> = ({ type }) => {
     { field: 'gender', header: 'Gender', type: 'select', options: [{label: 'Male', value:'Male'}, {label: 'Female', value:'Female'}], width: '80px' },
     { field: 'dob', header: 'DOB', type: 'date', width: '110px' },
     { field: 'phone', header: 'Phone', type: 'text', width: '120px' },
+    { field: 'email', header: 'Email', type: 'text', width: '150px' },
     { field: 'wechat', header: 'WeChat', type: 'text', width: '120px' },
     { field: 'university', header: 'University (Dept/Plan)', type: 'text', width: '200px' },
     { field: 'currentUnit', header: 'Current Unit', type: 'text', width: '150px' },
@@ -213,19 +221,20 @@ const PersonManager: React.FC<Props> = ({ type }) => {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
             {filteredList.map(p => (
-              <div key={p.id} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow">
+              <div key={p.id} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer" onClick={() => handleOpenDetailModal(p)}>
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <h3 className="font-bold text-lg text-slate-800">{p.name}</h3>
                     <div className="text-xs text-slate-500">{p.gender} • {p.currentUnit}</div>
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                     {canEditPerson(p) && <button onClick={() => handleOpenModal(p)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>}
                     {(!currentUser || currentUser.role === 'viewer') ? null : <button onClick={() => handleDelete(p.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>}
                   </div>
                 </div>
                 <div className="space-y-1 text-sm text-slate-600">
                   <div className="flex justify-between"><span>Phone:</span> <span className="font-medium">{p.phone}</span></div>
+                  {p.email && <div className="flex justify-between"><span>Email:</span> <span className="font-medium text-xs">{p.email}</span></div>}
                   <div className="flex justify-between"><span>Diff:</span> <span className="font-medium">{p.difficultyRange || '-'}</span></div>
                   {p.wechat && <div className="flex justify-between"><span>WeChat:</span> <span className="font-medium">{p.wechat}</span></div>}
                 </div>
@@ -258,6 +267,7 @@ const PersonManager: React.FC<Props> = ({ type }) => {
 
               <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider mt-4 border-b pb-1">Contact & Finance</div>
               <input className="p-2 border rounded" placeholder="Phone" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} />
+              <input className="p-2 border rounded" placeholder="Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
               <input className="p-2 border rounded" placeholder="WeChat" value={formData.wechat} onChange={e => setFormData({...formData, wechat: e.target.value})} />
               <input className="col-span-2 p-2 border rounded" placeholder="Address" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
               <input className="col-span-2 p-2 border rounded" placeholder="Bank Account" value={formData.bankAccount} onChange={e => setFormData({...formData, bankAccount: e.target.value})} />
@@ -268,6 +278,55 @@ const PersonManager: React.FC<Props> = ({ type }) => {
                  <button type="submit" className="px-6 py-2 bg-blue-600 text-white rounded">Save</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isDetailModalOpen && viewingPerson && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex justify-between sticky top-0 bg-white z-10">
+              <h3 className="text-xl font-bold">Profile Details</h3>
+              <button onClick={() => setIsDetailModalOpen(false)}><X size={24} /></button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-2 gap-6">
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2">Basic Information</div>
+                <div><div className="text-xs text-slate-500 mb-1">Name</div><div className="font-medium">{viewingPerson.name}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Gender</div><div className="font-medium">{viewingPerson.gender}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Date of Birth</div><div className="font-medium">{viewingPerson.dob || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Current Unit</div><div className="font-medium">{viewingPerson.currentUnit || '-'}</div></div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Education</div>
+                <div><div className="text-xs text-slate-500 mb-1">Junior High School</div><div className="font-medium">{viewingPerson.juniorHigh || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Senior High School</div><div className="font-medium">{viewingPerson.seniorHigh || '-'}</div></div>
+                <div className="col-span-2"><div className="text-xs text-slate-500 mb-1">University (Dept / Plan)</div><div className="font-medium">{viewingPerson.university || '-'}</div></div>
+                <div className="col-span-2"><div className="text-xs text-slate-500 mb-1">Research Institute</div><div className="font-medium">{viewingPerson.researchLab || '-'}</div></div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Professional</div>
+                <div><div className="text-xs text-slate-500 mb-1">Difficulty Range</div><div className="font-medium">{viewingPerson.difficultyRange || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Preferences</div><div className="font-medium">{viewingPerson.preferences || '-'}</div></div>
+                <div className="col-span-2"><div className="text-xs text-slate-500 mb-1">Work/Teaching Experience</div><div className="font-medium whitespace-pre-wrap">{viewingPerson.workHistory || '-'}</div></div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Contact & Finance</div>
+                <div><div className="text-xs text-slate-500 mb-1">Phone</div><div className="font-medium">{viewingPerson.phone || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Email</div><div className="font-medium">{viewingPerson.email || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">WeChat</div><div className="font-medium">{viewingPerson.wechat || '-'}</div></div>
+                <div className="col-span-2"><div className="text-xs text-slate-500 mb-1">Address</div><div className="font-medium">{viewingPerson.address || '-'}</div></div>
+                <div className="col-span-2"><div className="text-xs text-slate-500 mb-1">Bank Account</div><div className="font-medium">{viewingPerson.bankAccount || '-'}</div></div>
+              </div>
+              <div className="pt-4 border-t flex justify-end gap-3">
+                <button onClick={() => setIsDetailModalOpen(false)} className="px-6 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200">Close</button>
+                {canEditPerson(viewingPerson) && (
+                  <button onClick={() => {
+                    setIsDetailModalOpen(false);
+                    handleOpenModal(viewingPerson);
+                  }} className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-2">
+                    <Edit size={16} /> Edit Profile
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

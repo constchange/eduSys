@@ -21,6 +21,7 @@ export interface Person {
   
   // Contact & Finance
   phone: string;
+  email: string;
   wechat: string;
   address: string;
   bankAccount: string;

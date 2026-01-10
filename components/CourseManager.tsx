@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Course } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, Users } from 'lucide-react';
+import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, Users, Eye } from 'lucide-react';
 import { exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
@@ -24,7 +24,9 @@ const CourseManager: React.FC = () => {
 
   const [viewMode, setViewMode] = useState<'card' | 'grid'>('card'); 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [viewingCourse, setViewingCourse] = useState<Course | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -105,6 +107,11 @@ const CourseManager: React.FC = () => {
       setEditingId(null);
     }
     setIsModalOpen(true);
+  };
+
+  const handleOpenDetailModal = (course: Course) => {
+    setViewingCourse(course);
+    setIsDetailModalOpen(true);
   };
 
   const saveCourse = () => {
@@ -257,13 +264,13 @@ const CourseManager: React.FC = () => {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
              {filteredCourses.map(c => (
-              <div key={c.id} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col">
+              <div key={c.id} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col cursor-pointer" onClick={() => handleOpenDetailModal(c)}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1">
                     <h3 className="font-bold text-lg text-slate-800 line-clamp-1" title={c.name}>{c.name}</h3>
                     <div className="text-xs text-slate-500">{c.type} • {c.semester}</div>
                   </div>
-                  <div className="flex gap-1 ml-2">
+                  <div className="flex gap-1 ml-2" onClick={(e) => e.stopPropagation()}>
                     <button onClick={() => handleOpenModal(c)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit size={16}/></button>
                     <button onClick={() => openCourseAttEditor(c)} className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="Edit Attendees"><Users size={16} /></button>
                     <button onClick={() => handleDelete(c.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 size={16}/></button>
@@ -331,6 +338,118 @@ const CourseManager: React.FC = () => {
               <div className="flex justify-end gap-3 pt-2 border-t">
                 <button onClick={() => { setIsCourseAttModalOpen(false); setCurrentCourseForAtt(null); }} className="px-4 py-2 border rounded">Cancel</button>
                 <button onClick={() => currentCourseForAtt && applyAttendeesToCourse(currentCourseForAtt, courseAttPhonesText)} className="px-4 py-2 bg-indigo-600 text-white rounded">Apply to All Sessions</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isDetailModalOpen && viewingCourse && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b flex justify-between sticky top-0 bg-white z-10">
+              <h3 className="text-xl font-bold">Course Details</h3>
+              <button onClick={() => setIsDetailModalOpen(false)}><X size={24} /></button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="col-span-2">
+                  <h2 className="text-2xl font-bold text-slate-800 mb-2">{viewingCourse.name}</h2>
+                  <div className="flex gap-2 flex-wrap">
+                    <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-sm">{viewingCourse.type}</span>
+                    <span className="bg-purple-50 text-purple-700 px-3 py-1 rounded-full text-sm">{viewingCourse.semester}</span>
+                    {viewingCourse.difficulty && <span className="bg-green-50 text-green-700 px-3 py-1 rounded-full text-sm">{viewingCourse.difficulty}</span>}
+                    {viewingCourse.module && <span className="bg-orange-50 text-orange-700 px-3 py-1 rounded-full text-sm">{viewingCourse.module}</span>}
+                  </div>
+                </div>
+
+                <div className="col-span-2 grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg">
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-indigo-600">{viewingCourse.sessionCount || 0}</div>
+                    <div className="text-sm text-slate-500">Sessions</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-indigo-600">{viewingCourse.totalHours || 0}</div>
+                    <div className="text-sm text-slate-500">Total Hours</div>
+                  </div>
+                </div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2">Basic Information</div>
+                <div><div className="text-xs text-slate-500 mb-1">Location</div><div className="font-medium">{viewingCourse.location || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Start Date</div><div className="font-medium">{viewingCourse.startDate || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">End Date</div><div className="font-medium">{viewingCourse.endDate || '-'}</div></div>
+                <div><div className="text-xs text-slate-500 mb-1">Default Session Time</div><div className="font-medium">{viewingCourse.defaultStartTime && viewingCourse.defaultEndTime ? `${viewingCourse.defaultStartTime} - ${viewingCourse.defaultEndTime}` : '-'}</div></div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Teachers</div>
+                <div className="col-span-2">
+                  {viewingCourse.teacherIds.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {viewingCourse.teacherIds.map(tid => {
+                        const teacher = teachers.find(t => t.id === tid);
+                        return teacher ? (
+                          <div key={tid} className="bg-blue-50 border border-blue-200 text-blue-800 px-3 py-2 rounded-lg">
+                            <div className="font-medium">{teacher.name}</div>
+                            <div className="text-xs text-blue-600">{teacher.phone}</div>
+                          </div>
+                        ) : null;
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-slate-400">No teachers assigned</div>
+                  )}
+                </div>
+
+                <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Teaching Assistants</div>
+                <div className="col-span-2">
+                  {viewingCourse.assistantIds.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {viewingCourse.assistantIds.map(aid => {
+                        const assistant = assistants.find(a => a.id === aid);
+                        return assistant ? (
+                          <div key={aid} className="bg-green-50 border border-green-200 text-green-800 px-3 py-2 rounded-lg">
+                            <div className="font-medium">{assistant.name}</div>
+                            <div className="text-xs text-green-600">{assistant.phone}</div>
+                          </div>
+                        ) : null;
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-slate-400">No TAs assigned</div>
+                  )}
+                </div>
+
+                {viewingCourse.notes && (
+                  <>
+                    <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Notes</div>
+                    <div className="col-span-2">
+                      <div className="bg-slate-50 p-4 rounded-lg whitespace-pre-wrap">{viewingCourse.notes}</div>
+                    </div>
+                  </>
+                )}
+
+                {viewingCourse.platformMeta && Object.keys(viewingCourse.platformMeta).length > 0 && (
+                  <>
+                    <div className="col-span-2 text-sm font-bold text-slate-500 uppercase tracking-wider border-b pb-2 mt-4">Platform Sync Status</div>
+                    <div className="col-span-2 flex flex-wrap gap-3">
+                      {Object.entries(viewingCourse.platformMeta).map(([platform, meta]: any) => (
+                        <div key={platform} className={`px-4 py-3 rounded-lg border ${meta.status === 'ok' ? 'bg-green-50 border-green-200' : meta.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                          <div className="font-medium capitalize">{platform}</div>
+                          <div className="text-xs text-slate-600 mt-1">Status: {meta.status || 'unknown'}</div>
+                          {meta.lastSyncedAt && <div className="text-xs text-slate-500 mt-1">{new Date(meta.lastSyncedAt).toLocaleString()}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="pt-4 border-t flex justify-end gap-3">
+                <button onClick={() => setIsDetailModalOpen(false)} className="px-6 py-2 bg-slate-100 text-slate-700 rounded hover:bg-slate-200">Close</button>
+                <button onClick={() => {
+                  setIsDetailModalOpen(false);
+                  handleOpenModal(viewingCourse);
+                }} className="px-6 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 flex items-center gap-2">
+                  <Edit size={16} /> Edit Course
+                </button>
               </div>
             </div>
           </div>
