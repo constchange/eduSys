@@ -168,11 +168,12 @@ const App: React.FC = () => {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('Auth state change event:', event);
-      // 只在关键事件时更新session
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
+      // 只在真正的登录/登出时更新session
+      // 移除 INITIAL_SESSION，避免在窗口焦点变化时触发
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
         setSession(session);
       }
-      // 忽略 TOKEN_REFRESHED, USER_UPDATED 等事件，避免不必要的重新渲染
+      // 忽略 TOKEN_REFRESHED, USER_UPDATED, INITIAL_SESSION 等事件，避免不必要的重新渲染
     });
 
     return () => subscription.unsubscribe();

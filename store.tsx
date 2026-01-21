@@ -123,7 +123,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [state, setState] = useState<AppState>(initialState);
   const [isLoading, setIsLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
-  const [initialProfileLoad, setInitialProfileLoad] = useState(true); // 标记是否是初次加载
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const isEditor = !!(currentUser && currentUser.role === 'editor');
@@ -215,9 +214,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 监听 auth 状态并设置 currentUser（根据 users 表的 email 匹配）
   useEffect(() => {
-    const setProfileFromAuth = async (isInitial: boolean = false) => {
-      // 只在初次加载时显示loading状态
-      if (isInitial) {
+    // 使用 ref 来跟踪是否已经完成初始加载，避免重复显示 loading
+    let isInitialLoad = true;
+    
+    const setProfileFromAuth = async (showLoading = true) => {
+      // 只在初次加载或明确需要时才显示 loading
+      if (showLoading && isInitialLoad) {
         setProfileLoading(true);
       }
       try {
@@ -256,21 +258,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         console.error('Error setting current user from auth:', e);
       } finally {
-        if (isInitial) {
+        if (showLoading && isInitialLoad) {
           setProfileLoading(false);
-          setInitialProfileLoad(false);
+          isInitialLoad = false;
         }
       }
     };
 
-    // 初次加载时显示loading
+    // 初始加载时显示 loading
     setProfileFromAuth(true);
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('[Store] Auth state change event:', event);
-      // 只在关键事件时重新加载用户配置，避免token刷新时的不必要重载
+      // 只在真正的登录/登出时重新加载用户配置
+      // 移除 INITIAL_SESSION，避免在窗口焦点变化时重新加载
       if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
-        // 真正的登录/登出事件，后台静默更新用户信息
+        // 后续的认证状态变化不显示 loading 界面，静默更新
         setProfileFromAuth(false);
       }
       // 忽略 TOKEN_REFRESHED, USER_UPDATED, INITIAL_SESSION 等事件
