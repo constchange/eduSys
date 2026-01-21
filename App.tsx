@@ -163,10 +163,16 @@ const App: React.FC = () => {
     });
 
     // 2. 监听登录/登出变化
+    // 只在真正的登录/登出事件时更新session，忽略token刷新等事件以避免页面重置
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state change event:', event);
+      // 只在关键事件时更新session
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
+        setSession(session);
+      }
+      // 忽略 TOKEN_REFRESHED, USER_UPDATED 等事件，避免不必要的重新渲染
     });
 
     return () => subscription.unsubscribe();

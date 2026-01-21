@@ -258,8 +258,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setProfileFromAuth();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setProfileFromAuth();
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[Store] Auth state change event:', event);
+      // 只在关键事件时重新加载用户配置，避免token刷新时的不必要重载
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
+        setProfileFromAuth();
+      }
+      // 忽略 TOKEN_REFRESHED, USER_UPDATED 等事件
     });
 
     return () => sub.subscription.unsubscribe();

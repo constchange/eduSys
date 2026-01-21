@@ -24,5 +24,15 @@ if (!isSupabaseConfigured) {
 
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co', 
-  supabaseKey || 'placeholder'
+  supabaseKey || 'placeholder',
+  {
+    auth: {
+      // 保持自动刷新token的功能，但不触发onAuthStateChange
+      autoRefreshToken: true,
+      // 保持会话持久化
+      persistSession: true,
+      // 禁用自动检测存储变化（避免多标签页同步导致的重新渲染）
+      detectSessionInUrl: true
+    }
+  }
 );
