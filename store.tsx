@@ -123,6 +123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [state, setState] = useState<AppState>(initialState);
   const [isLoading, setIsLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [initialProfileLoad, setInitialProfileLoad] = useState(true); // 标记是否是初次加载
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const isEditor = !!(currentUser && currentUser.role === 'editor');
@@ -214,8 +215,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 监听 auth 状态并设置 currentUser（根据 users 表的 email 匹配）
   useEffect(() => {
-    const setProfileFromAuth = async () => {
-      setProfileLoading(true);
+    const setProfileFromAuth = async (isInitial: boolean = false) => {
+      // 只在初次加载时显示loading状态
+      if (isInitial) {
+        setProfileLoading(true);
+      }
       try {
         const { data } = await supabase.auth.getUser();
         const authUser = data.user;
@@ -252,19 +256,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (e) {
         console.error('Error setting current user from auth:', e);
       } finally {
-        setProfileLoading(false);
+        if (isInitial) {
+          setProfileLoading(false);
+          setInitialProfileLoad(false);
+        }
       }
     };
 
-    setProfileFromAuth();
+    // 初次加载时显示loading
+    setProfileFromAuth(true);
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('[Store] Auth state change event:', event);
       // 只在关键事件时重新加载用户配置，避免token刷新时的不必要重载
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
-        setProfileFromAuth();
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+        // 真正的登录/登出事件，后台静默更新用户信息
+        setProfileFromAuth(false);
       }
-      // 忽略 TOKEN_REFRESHED, USER_UPDATED 等事件
+      // 忽略 TOKEN_REFRESHED, USER_UPDATED, INITIAL_SESSION 等事件
     });
 
     return () => sub.subscription.unsubscribe();
