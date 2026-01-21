@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Session, Course } from '../types';
 import { useAppStore } from '../store.tsx';
-import { Plus, Edit, Trash2, AlertTriangle, Download, X, CalendarRange, Table, LayoutGrid, Upload, List, Users } from 'lucide-react';
+import { Plus, Edit, Trash2, AlertTriangle, Download, X, CalendarRange, Table, LayoutGrid, Upload, List, Users, Search } from 'lucide-react';
 import { calculateDuration, checkConflicts, exportToCSV, parseCSV } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
 const SessionManager: React.FC = () => {
-  const { sessions, courses, students, teachers, assistants, addSession, updateSession, deleteSession, importData, currentUser } = useAppStore();
+  const { sessions, courses, students, teachers, assistants, addSession, updateSession, deleteSession, importData, currentUser, recalculateAllSequences } = useAppStore();
   const isViewer = !!(currentUser && currentUser.role === 'viewer');
 
   // Viewers should not access the sessions management page directly
@@ -30,6 +30,7 @@ const SessionManager: React.FC = () => {
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -194,10 +195,6 @@ const SessionManager: React.FC = () => {
     let current = new Date(batchForm.startDate);
     const end = new Date(batchForm.endDate);
     const sessionsToAdd: Session[] = [];
-    let seq = 1;
-
-    const existingSessions = sessions.filter(s => s.courseId === batchForm.courseId);
-    if (existingSessions.length > 0) seq = Math.max(...existingSessions.map(s => s.sequence)) + 1;
 
     while (current <= end) {
       if (batchForm.weekdays.includes(current.getDay())) {
@@ -205,8 +202,8 @@ const SessionManager: React.FC = () => {
         sessionsToAdd.push({
           id: crypto.randomUUID(),
           courseId: batchForm.courseId,
-          sequence: seq++,
-          topic: `${batchForm.topicBase} ${seq}`,
+          sequence: 1, // 临时序号，会在addSession时自动重新计算
+          topic: `${batchForm.topicBase}`,
           date: dateStr,
           startTime: batchForm.startTime,
           endTime: batchForm.endTime,
@@ -254,7 +251,7 @@ const SessionManager: React.FC = () => {
           ...initialForm,
           id: crypto.randomUUID(),
           courseId: defaultCourseId,
-          sequence: (filteredSessions.length > 0 ? Math.max(...filteredSessions.map(s => s.sequence)) : 0) + 1
+          sequence: 1 // 临时序号，会在addSession时自动重新计算
       };
       addSession(newSession);
   };
@@ -316,7 +313,38 @@ const SessionManager: React.FC = () => {
     return ids.map(id => list.find(p => p.id === id)?.name).filter((n): n is string => !!n);
   };
 
-  const filteredSessions = (selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions).filter(s => sessionMatchesViewer(s)).map(s => {
+  // Enhanced search to include all properties
+  const searchInSession = (s: Session, term: string): boolean => {
+    const lowerTerm = term.toLowerCase();
+    const course = courses.find(c => c.id === s.courseId);
+    const teacherNames = getNames(s.teacherIds, 'T').join(' ');
+    const assistantNames = getNames(s.assistantIds, 'A').join(' ');
+    
+    const searchableFields = [
+      s.topic, s.date, s.startTime, s.endTime, s.notes,
+      course?.name, teacherNames, assistantNames,
+      s.sequence.toString()
+    ];
+    
+    return searchableFields.some(field => 
+      field && field.toLowerCase().includes(lowerTerm)
+    );
+  };
+
+  // Sort sessions by date and time (earliest first)
+  const sortSessionsByTime = (sessions: Session[]): Session[] => {
+    return [...sessions].sort((a, b) => {
+      const dateCompare = (a.date || '').localeCompare(b.date || '');
+      if (dateCompare !== 0) return dateCompare;
+      return (a.startTime || '').localeCompare(b.startTime || '');
+    });
+  };
+
+  const filteredSessions = sortSessionsByTime(
+    (selectedCourseId ? sessions.filter(s => s.courseId === selectedCourseId) : sessions)
+      .filter(s => sessionMatchesViewer(s))
+      .filter(s => searchInSession(s, searchTerm))
+  ).map(s => {
     const meta = (s as any).platformMeta || {};
     const entries = Object.values(meta) as any[];
     let syncStatus = '—';
@@ -332,7 +360,7 @@ const SessionManager: React.FC = () => {
   });
 
   const gridColumns: GridColumn[] = [
-    { field: 'sequence', header: 'Seq', type: 'number', width: '50px' },
+    { field: 'sequence', header: 'Seq', type: 'number', width: '50px', editable: false },
     ...(selectedCourseId ? [] : [{ 
         field: 'courseId', 
         header: 'Course', 
@@ -383,6 +411,18 @@ const SessionManager: React.FC = () => {
               <input type="file" ref={fileInputRef} hidden accept=".csv" onChange={handleImport} />
               <button onClick={() => fileInputRef.current?.click()} className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2"><Upload size={18}/> Import</button>
               <button onClick={() => exportToCSV(filteredSessions, 'Sessions_Export')} className="btn-secondary border px-4 rounded hover:bg-slate-50"><Download size={18}/></button>
+              <button 
+                onClick={async () => {
+                  if (confirm('重新计算所有课节序号？这将根据时间顺序重新分配所有课程的课节序号。')) {
+                    await recalculateAllSequences();
+                    alert('所有课节序号已重新计算完成！');
+                  }
+                }} 
+                className="btn-secondary border px-4 rounded hover:bg-slate-50 flex items-center gap-2 text-purple-600 border-purple-300"
+                title="重新计算所有课节序号"
+              >
+                🔄 重算序号
+              </button>
               <button onClick={() => setIsBatchModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
                 <CalendarRange size={18} /> Batch
               </button>
@@ -394,10 +434,20 @@ const SessionManager: React.FC = () => {
         </div>
       </div>
 
+      <div className="mb-4 relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+        <input 
+          className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg" 
+          placeholder="Search sessions..." 
+          value={searchTerm} 
+          onChange={e => setSearchTerm(e.target.value)} 
+        />
+      </div>
+
       <div className="flex-1 overflow-auto rounded-lg border-slate-200 bg-white">
         {viewMode === 'grid' ? (
           <DataGrid 
-            data={filteredSessions.sort((a,b) => a.sequence - b.sequence)} 
+            data={filteredSessions} 
             columns={gridColumns} 
             onUpdate={handleGridUpdate}
             onAddRow={handleAddRow}
@@ -413,7 +463,7 @@ const SessionManager: React.FC = () => {
                  <div className="flex-1">Staff</div>
                  <div className="w-20 text-right">Actions</div>
              </div>
-             {filteredSessions.sort((a,b) => a.sequence - b.sequence).map(s => {
+             {filteredSessions.map(s => {
                  const c = courses.find(x => x.id === s.courseId);
                  const tNames = getNames(s.teacherIds, 'T');
                  const aNames = getNames(s.assistantIds, 'A');
@@ -481,7 +531,10 @@ const SessionManager: React.FC = () => {
                   {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
-              <div><label className="text-xs font-bold text-slate-500 uppercase">Sequence #</label><input type="number" required className="w-full p-2 border rounded mt-1" value={formData.sequence} onChange={e => setFormData({...formData, sequence: parseInt(e.target.value)})} /></div>
+              <div className="col-span-2 bg-slate-50 p-3 rounded border">
+                <label className="text-xs font-bold text-slate-500 uppercase">Sequence #</label>
+                <div className="text-sm text-slate-600 mt-1">Sequence is automatically calculated based on date and time</div>
+              </div>
               <div><label className="text-xs font-bold text-slate-500 uppercase">Date</label><input type="date" required className="w-full p-2 border rounded mt-1" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} /></div>
               <div><label className="text-xs font-bold text-slate-500 uppercase">Start Time</label><input type="time" required className="w-full p-2 border rounded mt-1" value={formData.startTime} onChange={e => setFormData({...formData, startTime: e.target.value})} /></div>
               <div><label className="text-xs font-bold text-slate-500 uppercase">End Time</label><input type="time" required className="w-full p-2 border rounded mt-1" value={formData.endTime} onChange={e => setFormData({...formData, endTime: e.target.value})} /></div>

@@ -22,12 +22,20 @@ interface MonthlyStats {
 }
 
 const ScheduleStats: React.FC = () => {
-  const { teachers, assistants, sessions, courses, scheduleParams, updateScheduleParams, currentUser } = useAppStore();
+  const { teachers, assistants, sessions, courses, scheduleParams, updateScheduleParams, currentUser, ownerSchedules = [], loadOwnerSchedules } = useAppStore();
   const isViewer = !!(currentUser && currentUser.role === 'viewer');
+  const isOwner = !!(currentUser && currentUser.role === 'owner');
   const [viewMode, setViewMode] = React.useState<'calendar' | 'stats'>('calendar');
 
   // Load state from store
-  const { startMonth, endMonth, selectedPersonId } = scheduleParams;
+  const { startMonth, endMonth, selectedPersonId, showOwnerSchedules = false } = scheduleParams;
+  
+  // 加载负责人日程（如果需要）
+  useEffect(() => {
+    if (isOwner && showOwnerSchedules && ownerSchedules.length === 0) {
+      loadOwnerSchedules();
+    }
+  }, [isOwner, showOwnerSchedules, ownerSchedules.length]);
 
   // Set default End Month to the last session's month if not set
   useEffect(() => {
@@ -181,6 +189,21 @@ const ScheduleStats: React.FC = () => {
                 <label className="block text-sm font-semibold text-slate-600 mb-1">To</label>
                 <input type="month" className="border p-2 rounded-lg" value={endMonth} onChange={e => updateScheduleParams({ endMonth: e.target.value })} />
             </div>
+            {/* 负责人专属：显示负责人日程选项 */}
+            {isOwner && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="showOwnerSchedules"
+                  checked={showOwnerSchedules}
+                  onChange={e => updateScheduleParams({ showOwnerSchedules: e.target.checked })}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                />
+                <label htmlFor="showOwnerSchedules" className="text-sm font-semibold text-slate-700 cursor-pointer">
+                  同时显示负责人日程
+                </label>
+              </div>
+            )}
             {/* Export HTML -> Download Icon */}
             <button 
                 disabled={!selectedPersonId} 
@@ -212,10 +235,20 @@ const ScheduleStats: React.FC = () => {
                                 // Use explicit string matching for safety
                                 const daysSessions = personSessions.filter(s => s.date === dateStr).sort((a,b) => a.startTime.localeCompare(b.startTime));
                                 
+                                // 负责人日程：只有owner且勾选了显示时才显示
+                                const ownerDaySchedules = (isOwner && showOwnerSchedules)
+                                  ? ownerSchedules.filter(os => {
+                                      const osDate = os.start_datetime.slice(0, 10); // 直接截取 yyyy-MM-dd
+                                      return osDate === dateStr;
+                                    }).sort((a,b) => a.start_datetime.localeCompare(b.start_datetime))
+                                  : [];
+                                
                                 return (
                                     <div key={dateStr} className={`min-h-[120px] bg-white p-2 ${!isCurrent ? 'bg-slate-50 opacity-60' : ''}`}>
                                         <div className={`text-right text-sm font-medium mb-1 ${!isCurrent ? 'text-slate-400' : 'text-slate-700'}`}>{format(date, 'd')}</div>
-                                        <div className="space-y-1">{daysSessions.map(s => {
+                                        <div className="space-y-1">
+                                          {/* 显示课节 */}
+                                          {daysSessions.map(s => {
                                             const courseName = courses.find(c => c.id === s.courseId)?.name;
                                             const colorClass = courseColorMap[s.courseId] || 'bg-slate-100 text-slate-800 border-slate-200';
                                             const teacherNames = teachers.filter(t => s.teacherIds.includes(t.id)).map(t => t.name).join(', ');
@@ -230,7 +263,24 @@ const ScheduleStats: React.FC = () => {
                                                     </div>
                                                 </div>
                                             );
-                                            })}</div>
+                                          })}
+                                          
+                                          {/* 显示负责人日程 */}
+                                          {ownerDaySchedules.map(os => {
+                                            const startTime = os.start_datetime.slice(11, 16); // 直接截取 HH:mm
+                                            const endTime = os.end_datetime.slice(11, 16);
+                                            return (
+                                              <div key={os.id} className="text-xs p-1.5 rounded border-l-2 overflow-hidden bg-purple-100 text-purple-800 border-purple-300">
+                                                  <div className="font-bold truncate">{startTime}-{endTime}</div>
+                                                  <div className="truncate font-medium" title={os.title}>{os.title}</div>
+                                                  <div className="flex justify-between items-center opacity-75 text-[10px] mt-0.5 gap-2">
+                                                      <span className="truncate flex-1" title={os.type}>{os.type}</span>
+                                                      {os.location && <span className="truncate text-right shrink-0 max-w-[50%]" title={os.location}>{os.location}</span>}
+                                                  </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
                                     </div>
                                 );
                                 })}

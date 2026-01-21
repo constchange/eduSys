@@ -191,10 +191,24 @@ export interface School {
   notes?: string;
 }
 
+export interface OwnerSchedule {
+  id: string;
+  user_id: string;
+  start_datetime: string;
+  end_datetime: string;
+  type: string;
+  title: string;
+  location?: string;
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ScheduleParams {
   startMonth: string;
   endMonth: string;
   selectedPersonId: string;
+  showOwnerSchedules?: boolean;
 }
 
 export interface AppState {
@@ -205,6 +219,7 @@ export interface AppState {
   students?: Student[];
   clients?: Client[];
   schools?: School[];
+  ownerSchedules?: OwnerSchedule[];
   scheduleParams: ScheduleParams;
 }
 

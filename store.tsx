@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
-import { AppState, Course, Person, Session, ScheduleParams, UserRecord, Role, Student, Client, School } from './types';
+import { AppState, Course, Person, Session, ScheduleParams, UserRecord, Role, Student, Client, School, OwnerSchedule } from './types';
 
 // --- 1. 定义数据库白名单 (DB Schema Definition) ---
 // 只有在这里列出的字段才会被发送到 Supabase。
@@ -41,7 +41,12 @@ const DB_SCHEMA = {
   ],
 
   // 用户表：用于权限管理（与 Auth 整合）
-  users: ['id', 'email', 'name', 'phone', 'role']
+  users: ['id', 'email', 'name', 'phone', 'role'],
+
+  // 负责人日程表
+  owner_schedules: [
+    'id', 'user_id', 'start_datetime', 'end_datetime', 'type', 'title', 'location', 'notes', 'created_at', 'updated_at'
+  ]
 };
 
 // --- 2. 数据清洗函数 (Sanitizer) ---
@@ -78,8 +83,13 @@ interface AppContextType extends AppState {
   addSchool: (s: any) => void;
   updateSchool: (s: any) => void;
   deleteSchool: (id: string) => void;
+  loadOwnerSchedules: () => Promise<void>;
+  addOwnerSchedule: (s: OwnerSchedule) => void;
+  updateOwnerSchedule: (s: OwnerSchedule) => void;
+  deleteOwnerSchedule: (id: string) => void;
   importData: (type: 'teachers' | 'assistants' | 'courses' | 'sessions' | 'students' | 'clients' | 'schools', data: any[], mode: 'append' | 'replace') => void;
   updateScheduleParams: (params: Partial<ScheduleParams>) => void;
+  recalculateAllSequences: () => Promise<void>;
   isLoading: boolean;
   profileLoading: boolean;
   users: UserRecord[];
@@ -100,10 +110,12 @@ const initialState: AppState = {
   students: [],
   clients: [],
   schools: [],
+  ownerSchedules: [],
   scheduleParams: {
     startMonth: new Date().toISOString().slice(0, 7),
     endMonth: '',
-    selectedPersonId: ''
+    selectedPersonId: '',
+    showOwnerSchedules: false
   }
 };
 
@@ -152,10 +164,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const courses = coursesRaw.map(c => {
              const cSessions = sessions.filter(s => s.courseId === c.id);
              const totalHours = cSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
+             
+             // 自动计算开始和结束日期
+             let startDate = c.startDate;
+             let endDate = c.endDate;
+             if (cSessions.length > 0) {
+               const dates = cSessions.map(s => s.date).filter(Boolean).sort();
+               startDate = dates[0];
+               endDate = dates[dates.length - 1];
+             }
+             
              // normalize platform_meta (DB) to platformMeta (frontend)
              const platformMeta = (c as any).platform_meta ? (c as any).platform_meta : undefined;
              return {
                  ...c,
+                 startDate,
+                 endDate,
                  sessionCount: cSessions.length,
                  totalHours: parseFloat(totalHours.toFixed(2)),
                  platformMeta
@@ -170,7 +194,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sessions: sessions,
           students: students,
           clients: clients,
-          schools: schools
+          schools: schools,
+          ownerSchedules: [] // 延迟加载，不在初始化时加载
         }));
 
         setUsers(usersList);
@@ -287,11 +312,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (c.id !== courseId) return c;
       const courseSessions = sessions.filter(s => s.courseId === courseId);
       const totalHours = courseSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
+      
+      // 自动计算开始和结束日期
+      let startDate = c.startDate;
+      let endDate = c.endDate;
+      if (courseSessions.length > 0) {
+        const dates = courseSessions.map(s => s.date).filter(Boolean).sort();
+        startDate = dates[0];
+        endDate = dates[dates.length - 1];
+      }
+      
       return {
         ...c,
+        startDate,
+        endDate,
         sessionCount: courseSessions.length,
         totalHours: parseFloat(totalHours.toFixed(2))
       };
+    });
+  };
+
+  // --- 辅助函数：重新计算课节序号（按时间先后顺序）---
+  const recalculateSequences = (sessions: Session[], courseId: string): Session[] => {
+    // 先筛选出该课程的所有课节，按日期和时间排序
+    const courseSessions = sessions
+      .filter(s => s.courseId === courseId)
+      .sort((a, b) => {
+        const dateCompare = (a.date || '').localeCompare(b.date || '');
+        if (dateCompare !== 0) return dateCompare;
+        return (a.startTime || '').localeCompare(b.startTime || '');
+      });
+    
+    // 创建一个映射，将id映射到新的序号
+    const sequenceMap = new Map<string, number>();
+    courseSessions.forEach((s, index) => {
+      sequenceMap.set(s.id, index + 1);
+    });
+    
+    // 更新所有课节的序号
+    return sessions.map(s => {
+      if (s.courseId !== courseId) return s;
+      const newSequence = sequenceMap.get(s.id) || s.sequence;
+      return { ...s, sequence: newSequence };
     });
   };
 
@@ -459,6 +521,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (error) console.error('Delete School Error:', error);
   };
 
+  // --- 负责人日程管理 ---
+  const loadOwnerSchedules = async () => {
+    try {
+      const { data, error } = await supabase.from('owner_schedules').select('*');
+      if (!error && data) {
+        setState(prev => ({ ...prev, ownerSchedules: data as OwnerSchedule[] }));
+        console.log('[loadOwnerSchedules] Loaded schedules:', data.length);
+      } else if (error) {
+        console.error('[loadOwnerSchedules] Error:', error);
+      }
+    } catch (err) {
+      console.error('[loadOwnerSchedules] Exception:', err);
+    }
+  };
+
+  const addOwnerSchedule = async (s: OwnerSchedule) => {
+    console.log('[addOwnerSchedule] Adding schedule:', s);
+    
+    // 乐观更新本地状态
+    setState(prev => ({ ...prev, ownerSchedules: [...(prev.ownerSchedules || []), s] }));
+    
+    // 后台保存到数据库
+    try {
+      const payload = sanitize(s, 'owner_schedules');
+      console.log('[addOwnerSchedule] Sanitized payload:', payload);
+      const { data, error } = await supabase.from('owner_schedules').insert([payload]).select();
+      if (error) {
+        console.error('Add Owner Schedule Error:', error);
+        alert('保存日程失败: ' + error.message);
+        // 失败时回滚
+        setState(prev => ({ ...prev, ownerSchedules: (prev.ownerSchedules || []).filter(x => x.id !== s.id) }));
+      } else {
+        console.log('[addOwnerSchedule] Successfully saved:', data);
+      }
+    } catch (err: any) {
+      console.error('[addOwnerSchedule] Exception:', err);
+      alert('保存日程失败: ' + (err.message || '未知错误'));
+      // 失败时回滚
+      setState(prev => ({ ...prev, ownerSchedules: (prev.ownerSchedules || []).filter(x => x.id !== s.id) }));
+    }
+  };
+
+  const updateOwnerSchedule = async (s: OwnerSchedule) => {
+    console.log('[updateOwnerSchedule] Updating schedule:', s);
+    setState(prev => ({ ...prev, ownerSchedules: (prev.ownerSchedules || []).map(x => x.id === s.id ? s : x) }));
+    const payload = sanitize(s, 'owner_schedules');
+    delete payload.id;
+    const { data, error } = await supabase.from('owner_schedules').update(payload).eq('id', s.id).select();
+    if (error) {
+      console.error('Update Owner Schedule Error:', error);
+      alert('更新日程失败: ' + error.message);
+    } else {
+      console.log('[updateOwnerSchedule] Successfully updated:', data);
+    }
+  };
+
+  const deleteOwnerSchedule = async (id: string) => {
+    console.log('[deleteOwnerSchedule] Deleting schedule:', id);
+    setState(prev => ({ ...prev, ownerSchedules: (prev.ownerSchedules || []).filter(x => x.id !== id) }));
+    const { error } = await supabase.from('owner_schedules').delete().eq('id', id);
+    if (error) {
+      console.error('Delete Owner Schedule Error:', error);
+      alert('删除日程失败: ' + error.message);
+    } else {
+      console.log('[deleteOwnerSchedule] Successfully deleted');
+    }
+  };
+
   // --- 课程管理 (Course) ---
   const addCourse = async (c: Course) => {
     // Optimistic local add
@@ -532,22 +662,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (error) console.error("Delete Course Error:", error);
   };
 
+  // --- 辅助函数：批量更新课程的所有课节序号到数据库 ---
+  const syncSequencesToDB = async (courseId: string, sessions: Session[]) => {
+    const courseSessions = sessions.filter(s => s.courseId === courseId);
+    
+    // 批量更新所有课节的序号
+    for (const session of courseSessions) {
+      const { error } = await supabase
+        .from('sessions')
+        .update({ sequence: session.sequence })
+        .eq('id', session.id);
+      
+      if (error) {
+        console.error(`Failed to update sequence for session ${session.id}:`, error);
+      }
+    }
+  };
+
+  // --- 辅助函数：重新计算所有课程的所有课节序号 ---
+  const recalculateAllSequences = async () => {
+    console.log('开始重新计算所有课节序号...');
+    
+    setState(prev => {
+      let newSessions = [...prev.sessions];
+      
+      // 获取所有课程ID
+      const allCourseIds = Array.from(new Set(prev.courses.map(c => c.id)));
+      
+      // 对每个课程重新计算序号
+      allCourseIds.forEach(courseId => {
+        newSessions = recalculateSequences(newSessions, courseId);
+      });
+      
+      // 重新计算所有课程的统计信息
+      const updatedCourses = prev.courses.map(c => {
+        const courseSessions = newSessions.filter(s => s.courseId === c.id);
+        const totalHours = courseSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
+        
+        let startDate = c.startDate;
+        let endDate = c.endDate;
+        if (courseSessions.length > 0) {
+          const dates = courseSessions.map(s => s.date).filter(Boolean).sort();
+          startDate = dates[0];
+          endDate = dates[dates.length - 1];
+        }
+        
+        return {
+          ...c,
+          startDate,
+          endDate,
+          sessionCount: courseSessions.length,
+          totalHours: parseFloat(totalHours.toFixed(2))
+        };
+      });
+      
+      return { ...prev, sessions: newSessions, courses: updatedCourses };
+    });
+    
+    // 同步所有课节到数据库
+    const allCourseIds = Array.from(new Set(state.courses.map(c => c.id)));
+    for (const courseId of allCourseIds) {
+      await syncSequencesToDB(courseId, state.sessions);
+    }
+    
+    console.log('所有课节序号重新计算完成！');
+  };
+
   // --- 课节管理 (Session) ---
   const addSession = async (s: Session) => {
+    let updatedSession = s;
+    
     setState(prev => {
-      const newSessions = [...prev.sessions, s];
+      let newSessions = [...prev.sessions, s];
+      // 重新计算该课程的所有课节序号
+      newSessions = recalculateSequences(newSessions, s.courseId);
+      // 在setState内部获取更新后的session
+      updatedSession = newSessions.find(x => x.id === s.id) || s;
       const updatedCourses = recalculateCourseStats(prev.courses, newSessions, s.courseId);
       return { ...prev, sessions: newSessions, courses: updatedCourses };
     });
     
-    const payload = sanitize(s, 'sessions');
+    const payload = sanitize(updatedSession, 'sessions');
     const { data, error } = await supabase.from('sessions').insert([payload]).select('*');
     if (error) {
       console.error("Add Session Error:", error);
       return;
     }
 
-    const created = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : s;
+    const created = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : updatedSession;
     // Replace optimistic session with authoritative one
     setState(prev => ({ ...prev, sessions: prev.sessions.map(x => x.id === s.id ? created : x) }));
 
@@ -568,15 +770,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 同步参课学生到课程与学生的参与字段
     await syncCourseAttendees(created.courseId);
+    
+    // 同步该课程所有课节的序号到数据库
+    await syncSequencesToDB(created.courseId, state.sessions);
 
   };
 
   const updateSession = async (s: Session) => {
     // Capture previous session before state update so we can sync old course if needed
     const oldSession = state.sessions.find(x => x.id === s.id);
+    let updatedSession = s;
 
     setState(prev => {
-      const newSessions = prev.sessions.map(x => x.id === s.id ? s : x);
+      let newSessions = prev.sessions.map(x => x.id === s.id ? s : x);
+      // 重新计算该课程的所有课节序号
+      newSessions = recalculateSequences(newSessions, s.courseId);
+      // 如果课程ID改变了，也要重新计算旧课程的序号
+      if (oldSession && oldSession.courseId !== s.courseId) {
+        newSessions = recalculateSequences(newSessions, oldSession.courseId);
+      }
+      
+      // 在setState内部获取更新后的session
+      updatedSession = newSessions.find(x => x.id === s.id) || s;
+      
       let updatedCourses = recalculateCourseStats(prev.courses, newSessions, s.courseId);
       if (oldSession && oldSession.courseId !== s.courseId) {
           updatedCourses = recalculateCourseStats(updatedCourses, newSessions, oldSession.courseId);
@@ -584,7 +800,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ...prev, sessions: newSessions, courses: updatedCourses };
     });
     
-    const payload = sanitize(s, 'sessions');
+    const payload = sanitize(updatedSession, 'sessions');
     delete payload.id;
     const { data, error } = await supabase.from('sessions').update(payload).eq('id', s.id).select('*');
     if (error) {
@@ -592,7 +808,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const updated = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : s;
+    const updated = Array.isArray(data) && data.length > 0 ? (data[0] as Session) : updatedSession;
 
     // Trigger platform sync (non-blocking)
     try {
@@ -615,6 +831,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (oldSession && oldSession.courseId && oldSession.courseId !== updated.courseId) {
       await syncCourseAttendees(oldSession.courseId);
     }
+    
+    // 同步该课程所有课节的序号到数据库
+    await syncSequencesToDB(updated.courseId, state.sessions);
+    if (oldSession && oldSession.courseId && oldSession.courseId !== updated.courseId) {
+      await syncSequencesToDB(oldSession.courseId, state.sessions);
+    }
   };
 
   const deleteSession = async (id: string) => {
@@ -622,9 +844,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const sessionToDelete = state.sessions.find(s => s.id === id);
 
     setState(prev => {
-      const newSessions = prev.sessions.filter(x => x.id !== id);
+      let newSessions = prev.sessions.filter(x => x.id !== id);
       let updatedCourses = prev.courses;
       if (sessionToDelete) {
+         // 重新计算该课程的所有课节序号
+         newSessions = recalculateSequences(newSessions, sessionToDelete.courseId);
          updatedCourses = recalculateCourseStats(prev.courses, newSessions, sessionToDelete.courseId);
       }
       return { ...prev, sessions: newSessions, courses: updatedCourses };
@@ -633,7 +857,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (error) console.error("Delete Session Error:", error);
 
     // 同步参课学生
-    if (sessionToDelete && sessionToDelete.courseId) await syncCourseAttendees(sessionToDelete.courseId);
+    if (sessionToDelete && sessionToDelete.courseId) {
+      await syncCourseAttendees(sessionToDelete.courseId);
+      // 同步该课程所有课节的序号到数据库
+      await syncSequencesToDB(sessionToDelete.courseId, state.sessions);
+    }
   };
 
   const updateScheduleParams = (params: Partial<ScheduleParams>) => {
@@ -740,12 +968,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
              else newState.schools = [...(prev.schools || []), ...newItems];
         }
         
-        // 如果是导入 Sessions，重新计算 Course 统计
+        // 如果是导入 Sessions，重新计算 Course 统计和序号
         if (type === 'sessions') {
+             // 重新计算所有涉及课程的序号
+             const affectedCourseIds = Array.from(new Set(newState.sessions.map(s => s.courseId).filter(Boolean)));
+             affectedCourseIds.forEach(courseId => {
+               newState.sessions = recalculateSequences(newState.sessions, courseId);
+             });
+             
              newState.courses = newState.courses.map(c => {
                  const cSessions = newState.sessions.filter(s => s.courseId === c.id);
                  const totalHours = cSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
-                 return { ...c, sessionCount: cSessions.length, totalHours: parseFloat(totalHours.toFixed(2)) };
+                 
+                 // 自动计算开始和结束日期
+                 let startDate = c.startDate;
+                 let endDate = c.endDate;
+                 if (cSessions.length > 0) {
+                   const dates = cSessions.map(s => s.date).filter(Boolean).sort();
+                   startDate = dates[0];
+                   endDate = dates[dates.length - 1];
+                 }
+                 
+                 return { 
+                   ...c, 
+                   startDate,
+                   endDate,
+                   sessionCount: cSessions.length, 
+                   totalHours: parseFloat(totalHours.toFixed(2)) 
+                 };
              });
         }
 
@@ -883,7 +1133,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addStudent, updateStudent, deleteStudent,
       addClient, updateClient, deleteClient,
       addSchool, updateSchool, deleteSchool,
+      loadOwnerSchedules, addOwnerSchedule, updateOwnerSchedule, deleteOwnerSchedule,
       importData, updateScheduleParams,
+      recalculateAllSequences,
       isLoading,
       profileLoading,
       inviteUser

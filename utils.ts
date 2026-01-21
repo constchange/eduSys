@@ -1,6 +1,16 @@
 
 import { Person, Session, Course } from './types';
 import { differenceInMinutes, format, areIntervalsOverlapping, endOfWeek, eachDayOfInterval, endOfMonth, isSameMonth, addDays, isValid, eachMonthOfInterval } from 'date-fns';
+import { pinyin } from 'pinyin-pro';
+
+// --- Pinyin Sorting Helper ---
+export const sortByChinesePinyin = <T extends { name: string }>(list: T[]): T[] => {
+  return [...list].sort((a, b) => {
+    const pinyinA = pinyin(a.name, { toneType: 'none' }).toLowerCase();
+    const pinyinB = pinyin(b.name, { toneType: 'none' }).toLowerCase();
+    return pinyinA.localeCompare(pinyinB);
+  });
+};
 
 // --- Date Helpers ---
 

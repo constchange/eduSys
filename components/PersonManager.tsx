@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Person } from '../types';
 import { useAppStore } from '../store.tsx';
 import { Plus, Edit, Trash2, Download, Search, X, Table, LayoutGrid, Save, Upload, Eye } from 'lucide-react';
-import { exportToCSV, parseCSV } from '../utils';
+import { exportToCSV, parseCSV, sortByChinesePinyin } from '../utils';
 import DataGrid, { GridColumn } from './DataGrid';
 import ConfirmModal from './ConfirmModal';
 
@@ -191,7 +191,23 @@ const PersonManager: React.FC<Props> = ({ type }) => {
     { field: 'bankAccount', header: 'Bank Account', type: 'text', width: '180px' },
   ];
 
-  const filteredList = list.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  // Enhanced search to include all properties
+  const searchInPerson = (p: Person, term: string): boolean => {
+    const lowerTerm = term.toLowerCase();
+    const searchableFields = [
+      p.name, p.gender, p.dob, p.phone, p.email, p.wechat, 
+      p.university, p.currentUnit, p.workHistory, p.difficultyRange, 
+      p.preferences, p.juniorHigh, p.seniorHigh, p.researchLab, 
+      p.address, p.bankAccount
+    ];
+    return searchableFields.some(field => 
+      field && field.toLowerCase().includes(lowerTerm)
+    );
+  };
+
+  const filteredList = sortByChinesePinyin(
+    list.filter(p => searchInPerson(p, searchTerm))
+  );
 
   return (
     <>

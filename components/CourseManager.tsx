@@ -208,8 +208,8 @@ const CourseManager: React.FC = () => {
     { field: 'module', header: 'Module', type: 'text', width: '100px' },
     { field: 'semester', header: 'Semester', type: 'text', width: '100px' },
     { field: 'location', header: 'Location', type: 'text', width: '150px' },
-    { field: 'startDate', header: 'Start Date', type: 'date', width: '120px' },
-    { field: 'endDate', header: 'End Date', type: 'date', width: '120px' },
+    { field: 'startDate', header: 'Start Date', type: 'date', width: '120px', editable: false },
+    { field: 'endDate', header: 'End Date', type: 'date', width: '120px', editable: false },
     { field: 'sessionCount', header: 'Sessions', type: 'number', width: '90px', editable: false },
     { field: 'totalHours', header: 'Hours', type: 'number', width: '90px', editable: false },
     { field: 'defaultStartTime', header: 'Def. Start', type: 'text', width: '90px' },
@@ -218,8 +218,26 @@ const CourseManager: React.FC = () => {
     { field: 'lastSynced', header: 'Last Sync', type: 'text', width: '160px', editable: false }
   ];
 
+  // Enhanced search to include all properties
+  const searchInCourse = (c: Course, term: string): boolean => {
+    const lowerTerm = term.toLowerCase();
+    const searchableFields = [
+      c.name, c.type, c.difficulty, c.module, c.semester, c.location,
+      c.startDate, c.endDate, c.notes, c.defaultStartTime, c.defaultEndTime
+    ];
+    
+    // Also search in teacher and assistant names
+    const teacherNames = teachers.filter(t => c.teacherIds.includes(t.id)).map(t => t.name).join(' ');
+    const assistantNames = assistants.filter(a => c.assistantIds.includes(a.id)).map(a => a.name).join(' ');
+    searchableFields.push(teacherNames, assistantNames);
+    
+    return searchableFields.some(field => 
+      field && field.toLowerCase().includes(lowerTerm)
+    );
+  };
+
   const filteredCourses = courses
-    .filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
+    .filter(c => searchInCourse(c, searchTerm))
     .map(c => {
       const meta = (c as any).platformMeta || {};
       const entries = Object.values(meta) as any[];
@@ -233,6 +251,19 @@ const CourseManager: React.FC = () => {
         if (times.length > 0) lastSynced = new Date(Math.max(...times.map(t => new Date(t).getTime()))).toLocaleString();
       }
       return { ...c, syncStatus, lastSynced };
+    })
+    .sort((a, b) => {
+      // 无课节的课程排在最前面
+      if (!a.sessionCount && b.sessionCount) return -1;
+      if (a.sessionCount && !b.sessionCount) return 1;
+      if (!a.sessionCount && !b.sessionCount) return 0;
+      
+      // 按结束日期倒序（越晚结束的越靠前）
+      if (!a.endDate && b.endDate) return 1;
+      if (a.endDate && !b.endDate) return -1;
+      if (!a.endDate && !b.endDate) return 0;
+      
+      return b.endDate.localeCompare(a.endDate);
     });
 
   return (
@@ -263,8 +294,21 @@ const CourseManager: React.FC = () => {
            <DataGrid data={filteredCourses} columns={gridColumns} onUpdate={handleGridUpdate} onAddRow={handleAddRow} onDeleteRows={handleDeleteRows} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-4">
-             {filteredCourses.map(c => (
-              <div key={c.id} className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col cursor-pointer" onClick={() => handleOpenDetailModal(c)}>
+             {filteredCourses.map(c => {
+               // 判断背景色
+               const today = new Date().toISOString().split('T')[0];
+               let bgColor = 'bg-white';
+               
+               if (!c.sessionCount || c.sessionCount === 0) {
+                 // 无课节 - 浅红色
+                 bgColor = 'bg-red-50';
+               } else if (c.endDate && c.endDate < today) {
+                 // 已结束 - 灰色
+                 bgColor = 'bg-slate-100';
+               }
+               
+               return (
+              <div key={c.id} className={`${bgColor} border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col cursor-pointer`} onClick={() => handleOpenDetailModal(c)}>
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex-1">
                     <h3 className="font-bold text-lg text-slate-800 line-clamp-1" title={c.name}>{c.name}</h3>
@@ -313,7 +357,8 @@ const CourseManager: React.FC = () => {
                   {c.startDate && <div className="text-xs text-slate-400 mt-2 text-right">{c.startDate} to {c.endDate}</div>}
                 </div>
               </div>
-             ))}
+             );
+             })}
           </div>
         )}
       </div>
@@ -467,8 +512,12 @@ const CourseManager: React.FC = () => {
               <input placeholder="Module" className="p-2 border rounded" value={formData.module} onChange={e => setFormData({...formData, module: e.target.value})} />
               <input placeholder="Semester" className="p-2 border rounded" value={formData.semester} onChange={e => setFormData({...formData, semester: e.target.value})} />
               <input placeholder="Location" className="p-2 border rounded" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
-              <div className="flex gap-2 items-center"><label>Start:</label><input type="date" className="p-2 border rounded w-full" value={formData.startDate} onChange={e => setFormData({...formData, startDate: e.target.value})} /></div>
-              <div className="flex gap-2 items-center"><label>End:</label><input type="date" className="p-2 border rounded w-full" value={formData.endDate} onChange={e => setFormData({...formData, endDate: e.target.value})} /></div>
+              <div className="flex gap-2 items-center col-span-2 bg-slate-50 p-3 rounded border">
+                <label className="text-sm text-slate-600">Course dates are automatically calculated from sessions:</label>
+                <span className="font-medium">{formData.startDate || 'N/A'}</span>
+                <span>to</span>
+                <span className="font-medium">{formData.endDate || 'N/A'}</span>
+              </div>
               <div className="flex gap-2 items-center"><label>Def. Session Start:</label><input type="time" className="p-2 border rounded w-full" value={formData.defaultStartTime} onChange={e => setFormData({...formData, defaultStartTime: e.target.value})} /></div>
               <div className="flex gap-2 items-center"><label>Def. Session End:</label><input type="time" className="p-2 border rounded w-full" value={formData.defaultEndTime} onChange={e => setFormData({...formData, defaultEndTime: e.target.value})} /></div>
               

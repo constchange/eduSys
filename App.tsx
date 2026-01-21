@@ -10,9 +10,10 @@ import AdminPanel from './components/AdminPanel';
 import StudentManager from './components/StudentManager';
 import ClientManager from './components/ClientManager';
 import SchoolManager from './components/SchoolManager';
-import { Users, GraduationCap, BookOpen, Clock, Calendar, LogOut, Loader2, User, MapPin } from 'lucide-react';
+import OwnerScheduleManager from './components/OwnerScheduleManager';
+import { Users, GraduationCap, BookOpen, Clock, Calendar, LogOut, Loader2, User, MapPin, CalendarDays } from 'lucide-react';
 
-type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule' | 'admin' | 'students' | 'clients' | 'schools';
+type Tab = 'teachers' | 'assistants' | 'courses' | 'sessions' | 'schedule' | 'admin' | 'students' | 'clients' | 'schools' | 'ownerSchedule';
 
 // 内部组件：主界面
 const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, onLogout }) => {
@@ -41,6 +42,7 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
     { id: 'courses', label: 'Courses', icon: BookOpen, roles: ['owner', 'editor'] },
     { id: 'sessions', label: 'Sessions', icon: Clock, roles: ['owner', 'editor'] },
     { id: 'schedule', label: 'Schedule & Stats', icon: Calendar, roles: ['owner', 'editor', 'viewer'] },
+    { id: 'ownerSchedule', label: 'Owner Schedule', icon: CalendarDays, roles: ['owner'] },
     // New pages
     { id: 'students', label: 'Students', icon: Users, roles: ['owner', 'editor'] },
     { id: 'clients', label: 'Clients', icon: User, roles: ['owner', 'editor'] },
@@ -131,6 +133,7 @@ const Dashboard: React.FC<{ session: any; onLogout: () => void }> = ({ session, 
             {activeTab === 'courses' && <CourseManager />}
             {activeTab === 'sessions' && <SessionManager />}
             {activeTab === 'schedule' && <ScheduleStats />}
+            {activeTab === 'ownerSchedule' && <OwnerScheduleManager />}
             {activeTab === 'students' && <StudentManager />}
             {activeTab === 'clients' && <ClientManager />}
             {activeTab === 'schools' && <SchoolManager />}
